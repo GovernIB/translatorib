@@ -62,7 +62,7 @@
         <jsf-api.version>2.2.20</jsf-api.version>
         <commons-beanutils.version>1.9.3</commons-beanutils.version>
         <primefacesExtensions.version>6.1.1</primefacesExtensions.version>
-        <primefaces.allThemes.version>1.0.10</primefaces.allThemes.version>
+        <primefaces.allThemes.version>1.1.0</primefaces.allThemes.version>
         <xmlbeans.version>2.4.0</xmlbeans.version>
         <slf4j.version>1.5.8</slf4j.version>
         <hibernate-jpa-2.1-api.version>1.0.0.Final</hibernate-jpa-2.1-api.version>

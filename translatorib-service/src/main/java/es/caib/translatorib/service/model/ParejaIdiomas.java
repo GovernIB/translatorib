@@ -5,12 +5,6 @@ public class ParejaIdiomas {
     private Idioma origen;
     private Idioma destino;
 
-
-    // Constructor sin parámetros requerido por JSF
-    public ParejaIdiomas() {
-
-    }
-
     public ParejaIdiomas(Idioma origen, Idioma destino) {
         this.origen = origen;
         this.destino = destino;
@@ -46,12 +40,6 @@ public class ParejaIdiomas {
             return false;
         }
         ParejaIdiomas that = (ParejaIdiomas) obj;
-        if (origen == null || destino == null) {
-            return false;
-        }
-        if (that.origen == null || that.destino == null) {
-            return true;
-        }
         return origen.equals(that.origen) && destino.equals(that.destino);
     }
 
