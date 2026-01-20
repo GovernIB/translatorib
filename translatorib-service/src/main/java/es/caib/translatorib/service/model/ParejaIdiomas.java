@@ -40,6 +40,13 @@ public class ParejaIdiomas {
             return false;
         }
         ParejaIdiomas that = (ParejaIdiomas) obj;
+        if (origen == null || destino == null) {
+            return false;
+        }
+        if (that.origen == null || that.destino == null) {
+            return true;
+        }
+
         return origen.equals(that.origen) && destino.equals(that.destino);
     }
 

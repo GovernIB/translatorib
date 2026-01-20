@@ -429,7 +429,7 @@ public final class UtilJSF {
 	 * @return
 	 */
 	public static String getAyudaExternatranslatorib() {
-		String ruta = System.getProperty("es.caib.translatorib.properties.path", null);
+		String ruta = System.getProperty("es.caib.translatorib.properties", null);
 		if (ruta == null || ruta.isEmpty()) {
 			return null;
 		}

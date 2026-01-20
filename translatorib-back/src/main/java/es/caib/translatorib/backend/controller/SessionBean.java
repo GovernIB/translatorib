@@ -110,7 +110,7 @@ public class SessionBean {
         lang = FacesContext.getCurrentInstance().getViewRoot().getLocale().getLanguage();
         locale = FacesContext.getCurrentInstance().getViewRoot().getLocale();
         rolesList = securityService.getRoles();
-        final String pathProperties = System.getProperty("es.caib.translatorib.properties.path");
+        final String pathProperties = System.getProperty("es.caib.translatorib.properties");
         // Carga fichero de propiedades
         try (FileInputStream fis = new FileInputStream(pathProperties);) {
             propiedadesLocales = new Properties();

@@ -12,8 +12,8 @@ public enum Idioma implements Serializable {
 	CASTELLANO("es", "es")/*, CASTELLANO_ESPANYA("es", "es_ES")*/, CATALAN("ca", "ca"),
 	CATALAN_BALEAR("ca", "ca_ES");
 
-	private String idioma;
-	private String locale;
+	private final String idioma;
+	private final String locale;
 
 	/** Constructor. **/
 	Idioma(final String iIdioma, final String ivalor) {

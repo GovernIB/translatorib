@@ -220,7 +220,7 @@ public class ViewPlugins extends ViewControllerBase {
 	}
 
 	private Properties recuperarConfiguracionProperties() {
-		final String pathProperties = System.getProperty("es.caib.translatorib.properties.path");
+		final String pathProperties = System.getProperty("es.caib.translatorib.properties");
 		try (FileInputStream fis = new FileInputStream(pathProperties);) {
 			final Properties props = new Properties();
 			props.load(fis);

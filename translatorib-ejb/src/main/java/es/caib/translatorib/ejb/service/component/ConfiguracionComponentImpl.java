@@ -44,7 +44,7 @@ public class ConfiguracionComponentImpl implements ConfiguracionComponent {
     @PostConstruct
     public void init() {
         final String pathProperties = System
-                .getProperty("es.caib.translatorib.properties.path");
+                .getProperty("es.caib.translatorib.properties");
         propiedadesLocales = new Properties();
 
         // Carga fichero de propiedades
@@ -67,7 +67,7 @@ public class ConfiguracionComponentImpl implements ConfiguracionComponent {
             }
         }
 
-        final String pathPropertiesSystem = System.getProperty("es.caib.translatorib.system.properties.path");
+        final String pathPropertiesSystem = System.getProperty("es.caib.translatorib.system.properties");
         final Properties propSystem = new Properties();
         if (pathPropertiesSystem != null && !pathPropertiesSystem.isEmpty()) {
             FileInputStream fis = null;
@@ -91,7 +91,7 @@ public class ConfiguracionComponentImpl implements ConfiguracionComponent {
 
         // Obtiene directorio configuracion
         final File f = new File(
-                System.getProperty("es.caib.translatorib.properties.path"));
+                System.getProperty("es.caib.translatorib.properties"));
         directorioConf = f.getParentFile().getAbsolutePath();
     }
 
