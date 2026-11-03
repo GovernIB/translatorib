@@ -3,13 +3,13 @@ package es.caib.translatorib.plugin.api.plata;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.MessageDigest;
-import java.util.Base64;
-import java.util.Properties;
+import java.util.*;
 
 import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
 import javax.xml.namespace.QName;
 import javax.xml.ws.BindingProvider;
 
+import es.caib.translatorib.service.model.*;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.cxf.endpoint.Client;
 import org.apache.cxf.frontend.ClientProxy;
@@ -19,12 +19,6 @@ import org.fundaciobit.pluginsib.core.utils.AbstractPluginProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import es.caib.translatorib.service.model.Idioma;
-import es.caib.translatorib.service.model.Opciones;
-import es.caib.translatorib.service.model.ResultadoTraduccionDocumento;
-import es.caib.translatorib.service.model.ResultadoTraduccionTexto;
-import es.caib.translatorib.service.model.TipoDocumento;
-import es.caib.translatorib.service.model.TipoEntrada;
 import es.caib.translatorib.plata.rest.cxf.CustomFileResponse;
 import es.caib.translatorib.plata.rest.cxf.TranslatorV2;
 import es.caib.translatorib.plata.rest.cxf.TranslatorV2Service;
@@ -44,6 +38,16 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	/** Prefix. */
 	public static final String IMPLEMENTATION_BASE_PROPERTY = "plata.";
 
+	public static final List<ParejaIdiomas> PARES_IDIOMAS_PERMITIDOS =
+			Collections.unmodifiableList(Arrays.asList(
+					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.CATALAN),
+					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.CATALAN_BALEAR),
+					new ParejaIdiomas(Idioma.CATALAN, Idioma.CASTELLANO),
+					new ParejaIdiomas(Idioma.CATALAN, Idioma.CATALAN_BALEAR),
+					new ParejaIdiomas(Idioma.CATALAN_BALEAR, Idioma.CASTELLANO),
+					new ParejaIdiomas(Idioma.CATALAN_BALEAR, Idioma.CATALAN),
+					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.INGLES)
+			));
 
 	/**
 	 * Constructor
@@ -68,15 +72,27 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	public ResultadoTraduccionTexto realizarTraduccion(final String codeTranslate, final TipoEntrada tipoEntrada,
 			final Idioma idiomaEntrada, final Idioma idiomaSalida, final Opciones opciones) throws TraduccionException {
 		final ResultadoTraduccionTexto resultado = new ResultadoTraduccionTexto();
-		final String url = getPropiedad("url");
-		final String userName = getPropiedad("user");
+		final String url , userName, userPass;
 
-		final String userPass = getPropiedad("pass");
+		if (idiomaSalida == Idioma.INGLES && idiomaEntrada == Idioma.CASTELLANO) {
+			url = getPropiedad("rrnn_url");
+			userName = getPropiedad("rrnn_user");
+			userPass = getPropiedad("rrnn_pass");
+		} else {
+			url = getPropiedad("url");
+			userName = getPropiedad("user");
+			userPass = getPropiedad("pass");
+		}
 		final Long timeout = Long.valueOf(getPropiedad("timeout"));
 
+
+		long inicioPlata = System.currentTimeMillis();
+
 		try {
+			LOG.info("Creando cliente SOAP de PLATA");
 
 			final TranslatorV2 port = getClientePlata(url, timeout);
+
 
 			final java.lang.Boolean proxyCache = false;
 			final java.lang.String translationEngine = "plata";
@@ -96,11 +112,20 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			}
 			final String textoResultado = port.translateString(proxyCache, translationEngine, null, languagePair, ner,
 					contentType, markUnknown, codeTranslate, null, null, null, userName, userPass);
+
+			LOG.info("PLATA - Traducción completada correctamente");
+			LOG.info("Tiempo de respuesta PLATA: {} ms",
+					System.currentTimeMillis() - inicioPlata);
 			resultado.setError(false);
 			resultado.setTextoTraducido(textoResultado);
 
 		} catch (final Exception e) {
-			LOG.error("Error realizando la traduccion", e);
+			LOG.error("ERROR PLATA - URL: {}, idiomas: {} -> {}, tiempo: {} ms",
+					url,
+					idiomaEntrada,
+					idiomaSalida,
+					System.currentTimeMillis() - inicioPlata,
+					e);
 			resultado.setError(true);
 			resultado.setDescripcionError(ExceptionUtils.getMessage(e));
 
@@ -114,9 +139,18 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			final TipoDocumento tipoDocumento, final Idioma idiomaEntrada, final Idioma idiomaSalida,
 			final Opciones opciones) throws TraduccionException {
 		final ResultadoTraduccionDocumento resultado = new ResultadoTraduccionDocumento();
-		final String url = getPropiedad("url");
-		final String user = getPropiedad("user");
-		final String pass = getPropiedad("pass");
+		final String url, user, pass;
+		if (idiomaSalida == Idioma.INGLES
+				&& idiomaEntrada == Idioma.CASTELLANO) {
+			url = getPropiedad("rrnn_url");
+			user = getPropiedad("rrnn_user");
+			pass = getPropiedad("rrnn_pass");
+
+		} else {
+			url = getPropiedad("url");
+			user = getPropiedad("user");
+			pass = getPropiedad("pass");
+		}
 		final Long timeout = Long.valueOf(getPropiedad("timeout"));
 
 		try {
@@ -169,10 +203,12 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	 * @throws Exception Exception
 	 */
 	private TranslatorV2 getClientePlata(final String url, final Long timeout) throws NumberFormatException, Exception {
-		final QName SERVICE = new QName("http://inteco.minhap.gov/", "Translator_v2Service");
-		//final URL wsdlURL = new URL("http://pre-apertium.redsara.es:80/TranslatorService_v2/Translator_v2?wsdl");
+		/*final QName SERVICE = new QName("http://inteco.minhap.gov/", "Translator_v2Service");
 		final URL wsdlURL = new URL(url +"?wsdl");
 		final TranslatorV2Service servicio = new TranslatorV2Service(wsdlURL, SERVICE);
+		*/
+		// Utilizar el WSDL incluido en el proyecto
+		final TranslatorV2Service servicio =				new TranslatorV2Service();
 		// final TranslatorV2Service servicio = new TranslatorV2Service();
 		final TranslatorV2 serviceTasaSoap = servicio.getTranslatorV2Port();
 		final BindingProvider provider = (BindingProvider) serviceTasaSoap;
@@ -183,9 +219,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 		final HTTPClientPolicy httpClientPolicy = conduit.getClient();
 
 		// Timeout
-		if (timeout != null) {
-			httpClientPolicy.setReceiveTimeout(timeout * 1000);
-		}
+		httpClientPolicy.setConnectionTimeout(10000L);
+		httpClientPolicy.setReceiveTimeout(
+				timeout != null ? timeout * 1000L : 60000L
+		);
 
 		//Para poder traducir pdfs
 		httpClientPolicy.setAllowChunking(false);
@@ -323,5 +360,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			ner = Boolean.valueOf(Opciones.OPENTRAD_NER_VALOR_INACTIVO);
 		}
 		return ner;
+	}
+
+	@Override
+	public List<ParejaIdiomas> getParesIdiomasPermitidos() {
+		return PARES_IDIOMAS_PERMITIDOS;
 	}
 }

@@ -352,9 +352,14 @@ public class ViewTraducir extends ViewControllerBase {
 							.build();
 				}
 
-				// Enviar la solicitud y obtener la respuesta
-				HttpResponse<String> respuesta = client.send(request, HttpResponse.BodyHandlers.ofString());
-				LOG.debug("Respuesta del servidor: " + respuesta.body());
+
+
+				long inicio = System.currentTimeMillis();
+
+				LOG.info("Enviando petición REST...");
+
+				HttpResponse<String> respuesta =
+						client.send(request, HttpResponse.BodyHandlers.ofString());
 
 				// Convertir la respuesta String a ResultadoTraduccionTexto
 				ResultadoTraduccionTexto resultado = objectMapper.readValue(respuesta.body(), ResultadoTraduccionTexto.class);
@@ -475,7 +480,15 @@ public class ViewTraducir extends ViewControllerBase {
 		if (plugin != null) {
 
 			// Realizar traduccion
-			ResultadoTraduccionTexto resultado = traduccionService.realizarTraduccion(textoOrigen, TipoEntrada.TEXTO_PLANO, Idioma.fromString(idiomaOrigen.toString()), Idioma.fromString(idiomaDestino.toString(), "ca"), plugin, null);
+			ResultadoTraduccionTexto resultado =
+					traduccionService.realizarTraduccion(
+							textoOrigen,
+							TipoEntrada.TEXTO_PLANO,
+							idiomaOrigen,
+							idiomaDestino,
+							plugin,
+							null
+					);
 			textoDestino = resultado.getTextoTraducido();
 		}
 	}

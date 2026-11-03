@@ -1,13 +1,9 @@
 package es.caib.translatorib.plugin.api;
 
+import es.caib.translatorib.service.model.*;
 import org.fundaciobit.pluginsib.core.IPlugin;
 
-import es.caib.translatorib.service.model.Idioma;
-import es.caib.translatorib.service.model.Opciones;
-import es.caib.translatorib.service.model.ResultadoTraduccionDocumento;
-import es.caib.translatorib.service.model.ResultadoTraduccionTexto;
-import es.caib.translatorib.service.model.TipoDocumento;
-import es.caib.translatorib.service.model.TipoEntrada;
+import java.util.List;
 
 /**
  * Interface pasarela traducción.
@@ -53,4 +49,10 @@ public interface ITraduccionPlugin extends IPlugin {
 			final TipoDocumento tipoDocumento, final Idioma idiomaEntrada, final Idioma idiomaSalida,
 			final Opciones opciones) throws TraduccionException;
 
+
+	/**
+	 * Devuelve la lista de  parejas permitidos por idioma.
+	 * @return La lista de parejas idoma.
+	 */
+	List<ParejaIdiomas> getParesIdiomasPermitidos();
 }

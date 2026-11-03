@@ -105,25 +105,43 @@ public class TraduccionResource {
 		}
 	}
 
-	public Idioma getIdioma(final es.caib.translatorib.api.v1.model.Idioma idioma) {
+
+	public Idioma getIdioma(
+			final es.caib.translatorib.api.v1.model.Idioma idioma) {
+
+		if (idioma == null) {
+			throw new IllegalArgumentException(
+					"El idioma no puede ser null");
+		}
+
 		Idioma idi = null;
+
 		switch (idioma) {
-		case CASTELLANO:
-			idi = Idioma.CASTELLANO;
-			break;
-		/*case CASTELLANO_ESPANYA:
-			idi = es.caib.translatorib.persistence.api.model.Idioma.CASTELLANO_ESPANYA;
-			break;*/
-		case CATALAN:
+			case CASTELLANO:
+				idi = Idioma.CASTELLANO;
+				break;
+
+			case CATALAN:
 			case CATALAN_CATALUNYA:
 				idi = Idioma.CATALAN;
-			break;
-		case CATALAN_BALEAR:
-			idi = Idioma.CATALAN_BALEAR;
-			break;
+				break;
+
+			case CATALAN_BALEAR:
+				idi = Idioma.CATALAN_BALEAR;
+				break;
+
+			case INGLES:
+				idi = Idioma.INGLES;
+				break;
+
+			default:
+				throw new IllegalArgumentException(
+						"Idioma no soportado: " + idioma);
 		}
+
 		return idi;
 	}
+
 
 	/**
 	 * Realiza una traducción de un texto.

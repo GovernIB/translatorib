@@ -10,7 +10,7 @@ import java.io.Serializable;
  */
 public enum Idioma implements Serializable {
 	CASTELLANO("es", "es")/*, CASTELLANO_ESPANYA("es", "es_ES")*/, CATALAN("ca", "ca"),
-	CATALAN_BALEAR("ca", "ca_ES");
+	CATALAN_BALEAR("ca", "ca_ES"), INGLES("en", "en");
 
 	private final String idioma;
 	private final String locale;

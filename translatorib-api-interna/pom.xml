@@ -40,6 +40,22 @@
             <type>pom</type>
         </dependency>
 
+        <!-- Servicios de negocio: TraduccionService y PluginService.
+             El EAR ya incorpora translatorib-service en lib/. -->
+        <dependency>
+            <groupId>es.caib.translatorib</groupId>
+            <artifactId>translatorib-service</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Contrato para TraduccionException, importado por TraduccionResource. -->
+        <dependency>
+            <groupId>es.caib.translatorib</groupId>
+            <artifactId>translatorib-plugin</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Anotacions de documentació de openapi -->
         <dependency>
             <groupId>org.eclipse.microprofile.openapi</groupId>
@@ -147,6 +163,7 @@
                             <application>es.caib.translatorib.api.interna.config.ApiConfiguration</application>
                             <endpointClasses>
                                 <endpointClass>es.caib.translatorib.api.interna.services.v1.TraduccionResource</endpointClass>
+                                        <endpointClass>es.caib.translatorib.api.interna.services.v1.PluginResource</endpointClass>
                             </endpointClasses>
                             <output>${project.build.directory}/openapi/openapi.json</output>
                             <info>
@@ -172,6 +189,7 @@
                             <application>es.caib.translatorib.api.interna.JAXRSConfiguration</application>
                             <endpointClasses>
                                 <endpointClass>es.caib.translatorib.api.interna.services.v1.TraduccionResource</endpointClass>
+                                        <endpointClass>es.caib.translatorib.api.interna.services.v1.PluginResource</endpointClass>
                             </endpointClasses>
                             <output>${project.build.directory}/openapi/openapi.json</output>
                             <info>
@@ -273,6 +291,7 @@
                                     <application>es.caib.translatorib.api.interna.config.ApiConfiguration</application>
                                     <endpointClasses>
                                         <endpointClass>es.caib.translatorib.api.interna.services.v1.TraduccionResource</endpointClass>
+                                        <endpointClass>es.caib.translatorib.api.interna.services.v1.PluginResource</endpointClass>
                                     </endpointClasses>
                                     <output>${project.build.directory}/openapi/openapi.json</output>
                                     <info>

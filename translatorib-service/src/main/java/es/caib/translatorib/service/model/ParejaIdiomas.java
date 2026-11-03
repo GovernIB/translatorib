@@ -1,5 +1,7 @@
 package es.caib.translatorib.service.model;
 
+import java.util.Objects;
+
 // Clase interna para representar una relación entre dos idiomas
 public class ParejaIdiomas {
     private Idioma origen;
@@ -36,23 +38,19 @@ public class ParejaIdiomas {
         if (this == obj) {
             return true;
         }
-        if (obj == null || getClass() != obj.getClass()) {
+        if (!(obj instanceof ParejaIdiomas)) {
             return false;
-        }
-        ParejaIdiomas that = (ParejaIdiomas) obj;
-        if (origen == null || destino == null) {
-            return false;
-        }
-        if (that.origen == null || that.destino == null) {
-            return true;
         }
 
-        return origen.equals(that.origen) && destino.equals(that.destino);
+        ParejaIdiomas that = (ParejaIdiomas) obj;
+
+        return Objects.equals(origen, that.origen)
+                && Objects.equals(destino, that.destino);
     }
 
     @Override
     public int hashCode() {
-        return 31 * origen.hashCode() + destino.hashCode();
+        return Objects.hash(origen, destino);
     }
 
     public String getLabel() {

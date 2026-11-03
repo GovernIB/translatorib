@@ -3,13 +3,13 @@ package es.caib.translatorib.plugin.api.opentrad;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.MessageDigest;
-import java.util.Base64;
-import java.util.Properties;
+import java.util.*;
 
 import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
 import javax.xml.namespace.QName;
 import javax.xml.ws.BindingProvider;
 
+import es.caib.translatorib.service.model.*;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.cxf.endpoint.Client;
 import org.apache.cxf.frontend.ClientProxy;
@@ -19,12 +19,6 @@ import org.fundaciobit.pluginsib.core.utils.AbstractPluginProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import es.caib.translatorib.service.model.Idioma;
-import es.caib.translatorib.service.model.Opciones;
-import es.caib.translatorib.service.model.ResultadoTraduccionDocumento;
-import es.caib.translatorib.service.model.ResultadoTraduccionTexto;
-import es.caib.translatorib.service.model.TipoDocumento;
-import es.caib.translatorib.service.model.TipoEntrada;
 import es.caib.translatorib.opentrad.rest.cxf.CustomFileResponse;
 import es.caib.translatorib.opentrad.rest.cxf.TranslatorV2;
 import es.caib.translatorib.opentrad.rest.cxf.TranslatorV2Service;
@@ -42,6 +36,17 @@ public class OpenTradPlugin extends AbstractPluginProperties implements ITraducc
 
 	/** Prefix. */
 	public static final String IMPLEMENTATION_BASE_PROPERTY = "es.caib.translatorib.opentrad.";
+
+	public static final List<ParejaIdiomas> PARES_IDIOMAS_PERMITIDOS =
+			Collections.unmodifiableList(Arrays.asList(
+					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.CATALAN),
+					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.CATALAN_BALEAR),
+					new ParejaIdiomas(Idioma.CATALAN, Idioma.CASTELLANO),
+					new ParejaIdiomas(Idioma.CATALAN, Idioma.CATALAN_BALEAR),
+					new ParejaIdiomas(Idioma.CATALAN_BALEAR, Idioma.CASTELLANO),
+					new ParejaIdiomas(Idioma.CATALAN_BALEAR, Idioma.CATALAN)
+			));
+
 
 	public OpenTradPlugin(final String prefijoPropiedades, final Properties properties) {
 		super(prefijoPropiedades, properties);
@@ -285,5 +290,10 @@ public class OpenTradPlugin extends AbstractPluginProperties implements ITraducc
 			ner = Boolean.valueOf(Opciones.OPENTRAD_NER_VALOR_INACTIVO);
 		}
 		return ner;
+	}
+
+	@Override
+	public List<ParejaIdiomas> getParesIdiomasPermitidos() {
+		return PARES_IDIOMAS_PERMITIDOS;
 	}
 }

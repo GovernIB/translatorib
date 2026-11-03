@@ -1,14 +1,11 @@
 package es.caib.translatorib.plugin.api.mock;
 
-import es.caib.translatorib.service.model.Idioma;
-import es.caib.translatorib.service.model.Opciones;
-import es.caib.translatorib.service.model.ResultadoTraduccionDocumento;
-import es.caib.translatorib.service.model.ResultadoTraduccionTexto;
-import es.caib.translatorib.service.model.TipoDocumento;
-import es.caib.translatorib.service.model.TipoEntrada;
+import es.caib.translatorib.service.model.*;
 import es.caib.translatorib.plugin.api.ITraduccionPlugin;
 import org.fundaciobit.pluginsib.core.utils.AbstractPluginProperties;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 /**
@@ -55,5 +52,21 @@ public class MockTradPlugin extends AbstractPluginProperties implements ITraducc
 		resultado.setError(false);
 		resultado.setTextoTraducido("Hola");
 		return resultado;
+	}
+
+	@Override
+	public List<ParejaIdiomas> getParesIdiomasPermitidos() {
+
+		List<ParejaIdiomas> parejas = new ArrayList<ParejaIdiomas>();
+
+		for (Idioma origen : Idioma.values()) {
+			for (Idioma destino : Idioma.values()) {
+				if (origen != destino) {
+					parejas.add(new ParejaIdiomas(origen, destino));
+				}
+			}
+		}
+
+		return parejas;
 	}
 }

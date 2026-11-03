@@ -56,17 +56,6 @@ public class DialogPlugins extends ViewControllerBase  {
     public void load() {
         LOG.debug("init");
 
-        //Cargamos todas las posibles combinaciones de parejas.
-        // Generar todas las combinaciones posibles
-        todasLasCombinaciones = new ArrayList<ParejaIdiomas>();
-        for (Idioma origen : Idioma.values()) {
-            for (Idioma destino : Idioma.values()) {
-                if (!origen.equals(destino)) {
-                    todasLasCombinaciones.add(new ParejaIdiomas(origen, destino));
-                }
-            }
-        }
-
         // Inicializar lista vacía para las combinaciones seleccionadas
         combinacionesSeleccionadas = new ArrayList<>();
 
@@ -84,29 +73,66 @@ public class DialogPlugins extends ViewControllerBase  {
             }
         }
 
-        if (data.getIdiomasPermitidos() != null && !data.getIdiomasPermitidos().isEmpty()) {
-            cargarCombinacionesDesdeString(data.getIdiomasPermitidos());
+        //Cargamos todas las posibles combinaciones de parejas. (ahora viene por defecto en los plugins))
+        if (data.getCodigo() != null) {
+            todasLasCombinaciones =
+                    pluginService.getParesIdiomasPermitidos(
+                            data.getCodigo());
+        } else {
+            //Se pondrá vacía porque realmente, hay que implementar su XXXPLugin.java
+            todasLasCombinaciones = new ArrayList<>();
         }
+
+        if (data.getIdiomasPermitidos() != null
+                && !data.getIdiomasPermitidos().isEmpty()) {
+
+            cargarCombinacionesDesdeString(data.getIdiomasPermitidos());
+
+            // Mantener únicamente los pares soportados por el plugin
+            combinacionesSeleccionadas.retainAll(todasLasCombinaciones);
+        }
+
+
 
     }
 
 
+
     public void guardar() {
 
+        // Mantener únicamente los pares admitidos por el plugin
+        combinacionesSeleccionadas.retainAll(todasLasCombinaciones);
+
+        // IMPORTANTE: convertir la selección y guardarla en el DTO
         data.setIdiomasPermitidos(guardarCombinacionesComoString());
-        if (data.getIdiomasFrontal() == null || data.getIdiomasFrontal().isEmpty()) {
+
+        // Ajustar los idiomas disponibles en el frontal
+        if (data.getIdiomasFrontal() == null
+                || data.getIdiomasFrontal().isEmpty()) {
+
             data.setIdiomasFrontal(data.getIdiomasPermitidos());
+
         } else {
-            data.setIdiomasFrontal(filtrarIdiomas(data.getIdiomasFrontal(), data.getIdiomasPermitidos()));
+            data.setIdiomasFrontal(
+                    filtrarIdiomas(
+                            data.getIdiomasFrontal(),
+                            data.getIdiomasPermitidos()
+                    )
+            );
         }
+
         if (this.data.getCodigo() == null) {
             pluginService.guardarPlugin(this.data);
         } else {
             pluginService.updatePlugin(this.data);
         }
+
         final DialogResult result = new DialogResult();
+
         if (this.getModoAcceso() != null) {
-            result.setModoAcceso(TypeModoAcceso.valueOf(this.getModoAcceso()));
+            result.setModoAcceso(
+                    TypeModoAcceso.valueOf(this.getModoAcceso())
+            );
         } else {
             result.setModoAcceso(TypeModoAcceso.CONSULTA);
         }
@@ -114,6 +140,7 @@ public class DialogPlugins extends ViewControllerBase  {
         result.setResult(data);
         UtilJSF.closeDialog(result);
     }
+
 
 
     /**

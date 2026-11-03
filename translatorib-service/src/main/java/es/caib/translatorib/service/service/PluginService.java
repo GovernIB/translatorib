@@ -1,5 +1,6 @@
 package es.caib.translatorib.service.service;
 
+import es.caib.translatorib.service.model.ParejaIdiomas;
 import es.caib.translatorib.service.model.Plugin;
 
 import java.util.List;
@@ -56,4 +57,12 @@ public interface PluginService {
 	 * @param plugin el plugin
 	 */
     void borrar(Plugin plugin);
+
+	/**
+	 * Obtiene los pares de idiomas soportados por un plugin.
+	 *
+	 * @param codigo Código del plugin
+	 * @return Pares de idiomas admitidos
+	 */
+	List<ParejaIdiomas> getParesIdiomasPermitidos(Long codigo);
 }
