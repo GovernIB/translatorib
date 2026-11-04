@@ -283,9 +283,23 @@ public class ViewTraducir extends ViewControllerBase {
 	 * @param event the event
 	 */
 	public void cambiarIdiomaOrigenAux(AjaxBehaviorEvent event) {
-		if (idiomaOrigen.equals(idiomaDestino)) {
-			idiomaDestino = idiomaOrigenOld;
+
+		// Si el destino actual no es válido para el nuevo origen,
+		// seleccionar automáticamente el primer destino permitido.
+		if (idiomaDestino == null || esDisabledDestino(idiomaDestino)) {
+
+			idiomaDestino = null;
+
+			for (Idioma candidato : idiomasDestino) {
+				if (!esDisabledDestino(candidato)) {
+					idiomaDestino = candidato;
+					break;
+				}
+			}
+
+			idiomaDestinoOld = idiomaDestino;
 		}
+
 		idiomaOrigenOld = idiomaOrigen;
 	}
 
