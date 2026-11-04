@@ -185,6 +185,8 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setDescripcionError(textoResultado.getError());
 
 		} catch (final Exception e) {
+			LOG.error("Error al traducir documento con PLATA. Endpoint={}, tipo={}, idiomas={} -> {}",
+					url, tipoDocumento, idiomaEntrada, idiomaSalida, e);
 			resultado.setError(true);
 			resultado.setDescripcionError(ExceptionUtils.getMessage(e));
 

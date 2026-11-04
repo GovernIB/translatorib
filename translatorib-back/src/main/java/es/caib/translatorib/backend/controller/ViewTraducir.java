@@ -12,8 +12,6 @@ import es.caib.translatorib.service.service.ConfiguracionGlobalService;
 import es.caib.translatorib.service.service.PluginService;
 import es.caib.translatorib.service.service.TraduccionService;
 import org.primefaces.event.FileUploadEvent;
-import org.primefaces.model.DefaultStreamedContent;
-import org.primefaces.model.StreamedContent;
 import org.primefaces.model.file.UploadedFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,13 +20,17 @@ import javax.ejb.EJB;
 import javax.faces.bean.ManagedBean;
 import javax.faces.bean.ViewScoped;
 import javax.faces.context.FacesContext;
+import javax.faces.context.ExternalContext;
 import javax.faces.event.AjaxBehaviorEvent;
 import javax.inject.Inject;
-import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -81,7 +83,6 @@ public class ViewTraducir extends ViewControllerBase {
 	private Idioma idiomaDestinoOld;
 	private Integer tipo = 0;
 
-	private StreamedContent fileDownload;
 
 	/**
 	 * Inicializacion.
@@ -149,89 +150,132 @@ public class ViewTraducir extends ViewControllerBase {
 	public void handleFileUpload(FileUploadEvent event) {
 		this.file = event.getFile();
 		this.fileName = file.getFileName();
-		this.fileDownload=null;
 	}
 
+	/**
+	 * Prepara la traduccion documental y devuelve los bytes directamente al navegador.
+	 * Se invoca desde el boton no AJAX (NO desde un getter JSF).
+	 */
 	public void descargarArchivo() {
-		fileDownload=null;
-		// Lógica para devolver el archivo subido
-		if (file == null || contenido == null) {
-			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,  UtilJSF.getLiteral("viewTraducir.ArchivoNoSeleccionado"));
-		} else {
-			if (plugin != null && idiomaDestino != null && idiomaOrigen != null) {
 
-				try {
-					// Conectarse por restapi a un servicio de traduccion utilizando ParametrosTraduccionTexto
-					ParametrosTraduccionDocumento parametros = new ParametrosTraduccionDocumento();
-					parametros.setPlugin(plugin);
-					parametros.setTipoDocumento(getTipoDocumento(file.getFileName()));
-					parametros.setIdiomaEntrada(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaOrigen.toString()));
-					parametros.setIdiomaSalida(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaDestino.toString()));
-					parametros.setContenidoDocumento(Base64.getEncoder().encodeToString(contenido));
+		if (file == null || contenido == null || contenido.length == 0) {
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+					UtilJSF.getLiteral("viewTraducir.ArchivoNoSeleccionado"));
+			return;
+		}
 
-					String authHeader = null;
-					String user = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_USER);
-					String pwd = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_PWD);
-					if (user != null && pwd != null) {
-						// Codificar user y pass en Base64
-						String auth = user + ":" + pwd;
-						String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes());
-						authHeader = "Basic " + encodedAuth;
-					}
+		if (plugin == null || idiomaOrigen == null || idiomaDestino == null) {
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+					UtilJSF.getLiteral("viewTraducir.faltandatos"));
+			return;
+		}
 
-					// Convertir el objeto a JSON usando Jackson
-					ObjectMapper objectMapper = new ObjectMapper();
-					String json = objectMapper.writeValueAsString(parametros);
+		boolean respuestaBinariaIniciada = false;
 
-					// Crear un cliente HttpClient
-					HttpClient client = HttpClient.newHttpClient();
+		try {
+			ParametrosTraduccionDocumento parametros = new ParametrosTraduccionDocumento();
+			parametros.setPlugin(plugin);
+			parametros.setTipoDocumento(getTipoDocumento(file.getFileName()));
+			parametros.setIdiomaEntrada(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaOrigen.toString()));
+			parametros.setIdiomaSalida(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaDestino.toString()));
+			parametros.setContenidoDocumento(Base64.getEncoder().encodeToString(contenido));
 
-					// Crear una solicitud POST con el cuerpo en JSON
-					HttpRequest request;
-					String url = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_URL_DOC);
-					if (authHeader == null) {
-						request = HttpRequest.newBuilder()
-								.uri(URI.create(url))
-								.header("Content-Type", "application/json")
-								.POST(HttpRequest.BodyPublishers.ofString(json))
-								.build();
-					} else {
-						request = HttpRequest.newBuilder()
-								.uri(URI.create(url))
-								.header("Content-Type", "application/json")
-								.header("Authorization", authHeader) // Añadir el encabezado de autorización
-								.POST(HttpRequest.BodyPublishers.ofString(json))
-								.build();
-					}
+			String user = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_USER);
+			String pwd = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_PWD);
+			String json = new ObjectMapper().writeValueAsString(parametros);
+			String url = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_URL_DOC);
+			HttpRequest.Builder builder = HttpRequest.newBuilder()
+					.uri(URI.create(url))
+					.header("Content-Type", "application/json")
+					.POST(HttpRequest.BodyPublishers.ofString(json));
+			if (user != null && pwd != null) {
+				String auth = Base64.getEncoder().encodeToString(
+						(user + ":" + pwd).getBytes(StandardCharsets.UTF_8));
+				builder.header("Authorization", "Basic " + auth);
+			}
+			HttpRequest request = builder.build();
 
-					// Enviar la solicitud y obtener la respuesta
-					HttpResponse<String> respuesta = client.send(request, HttpResponse.BodyHandlers.ofString());
-					LOG.debug("Respuesta del servidor: " + respuesta.body());
+			HttpResponse<String> respuesta = HttpClient.newHttpClient()
+					.send(request, HttpResponse.BodyHandlers.ofString());
+			String contentType = respuesta.headers().firstValue("Content-Type").orElse("(no indicado)");
 
-					// Convertir la respuesta String a ResultadoTraduccionTexto
-					ResultadoTraduccionDocumento resultado = objectMapper.readValue(respuesta.body(), ResultadoTraduccionDocumento.class);
+			if (respuesta.statusCode() < 200 || respuesta.statusCode() >= 300) {
+				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+						UtilJSF.getLiteral("viewTraducir.errorDescarga"));
+				return;
+			}
 
-					if (resultado== null || resultado.isError()) {
-						UtilJSF.addMessageContext(TypeNivelGravedad.WARNING,  UtilJSF.getLiteral("viewTraducir.errorTraduccion") + resultado.getDescripcionError());
-					} else {
-						// Descargar el archivo
+			if (respuesta.body() == null || respuesta.body().trim().isEmpty()
+					|| contentType.toLowerCase(Locale.ROOT).contains("text/html")) {
+				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+						UtilJSF.getLiteral("viewTraducir.errorDescarga"));
+				return;
+			}
 
-						fileDownload = DefaultStreamedContent.builder()
-								.name(file.getFileName())
-								.contentType("application/octet-stream")
-								.stream(() -> new ByteArrayInputStream(Base64.getDecoder().decode(resultado.getTextoTraducido())))
-								.build();
+			ResultadoTraduccionDocumento resultado = new ObjectMapper()
+					.readValue(respuesta.body(), ResultadoTraduccionDocumento.class);
 
-						UtilJSF.addMessageContext(TypeNivelGravedad.INFO,  UtilJSF.getLiteral("viewTraducir.archivoDescargado")+"" );
-					}
-				} catch (Exception e) {
-					LOG.error("Error al realizar la traducción", e);
-					UtilJSF.addMessageContext(TypeNivelGravedad.ERROR, UtilJSF.getLiteral( "viewTraducir.errorDescarga"));
-				}
+			if (resultado == null || resultado.isError()) {
+				UtilJSF.addMessageContext(TypeNivelGravedad.WARNING,
+						UtilJSF.getLiteral("viewTraducir.errorTraduccion")
+								+ (resultado == null ? "Respuesta nula" : String.valueOf(resultado.getDescripcionError())));
+				return;
+			}
+
+			if (resultado.getTextoTraducido() == null || resultado.getTextoTraducido().isEmpty()) {
+				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+						UtilJSF.getLiteral("viewTraducir.errorDescarga"));
+				return;
+			}
+
+			byte[] bytesTraducidos = Base64.getMimeDecoder().decode(resultado.getTextoTraducido());
+
+			respuestaBinariaIniciada = true;
+			enviarDocumento(bytesTraducidos, file.getFileName());
+
+		} catch (Exception e) {
+			LOG.error("Error al realizar la traducción documental", e);
+			if (respuestaBinariaIniciada) {
+				// Si la respuesta es binaria, JSF no debe intentar renderizar HTML de error.
+				FacesContext.getCurrentInstance().responseComplete();
 			} else {
-				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,  UtilJSF.getLiteral("viewTraducir.faltandatos"));
+				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+						UtilJSF.getLiteral("viewTraducir.errorDescarga"));
 			}
 		}
+	}
+
+	/**
+	 * Envia el documento al navegador evitando usar p:fileDownload/getFileDownload.
+	 * Solo se invoca cuando la traduccion y la decodificacion han terminado bien.
+	 */
+	private void enviarDocumento(byte[] documento, String nombreArchivo) throws IOException {
+		String nombre = nombreArchivo == null ? "traduccion" : nombreArchivo.replace('\\', '/');
+		nombre = nombre.substring(nombre.lastIndexOf('/') + 1)
+				.replaceAll("[\r\n\"]", "_");
+		if (nombre.trim().isEmpty()) {
+			nombre = "traduccion";
+		}
+
+		String nombreASCII = nombre.replaceAll("[^ -~]", "_");
+		String nombreUTF8 = URLEncoder.encode(nombre, StandardCharsets.UTF_8.name())
+				.replace("+", "%20");
+
+		FacesContext faces = FacesContext.getCurrentInstance();
+		ExternalContext external = faces.getExternalContext();
+		external.responseReset();
+		external.setResponseContentType("application/octet-stream");
+		external.setResponseContentLength(documento.length);
+		external.setResponseHeader("Cache-Control", "no-store");
+		external.setResponseHeader("X-Content-Type-Options", "nosniff");
+		external.setResponseHeader("Content-Disposition",
+				"attachment; filename=\"" + nombreASCII + "\"; filename*=UTF-8''" + nombreUTF8);
+
+		try (OutputStream salida = external.getResponseOutputStream()) {
+			salida.write(documento);
+			salida.flush();
+		}
+		faces.responseComplete();
 	}
 
 	private es.caib.translatorib.api.v1.model.TipoDocumento getTipoDocumento(String fileName) {
@@ -603,14 +647,12 @@ public class ViewTraducir extends ViewControllerBase {
 		this.file = file.getFile();
 		this.fileName = file.getFile().getFileName();
 		this.contenido = file.getFile().getContent();
-		fileDownload=null;
 	}
 
 	public void setFile(UploadedFile file) {
 		this.file = file;
 		this.fileName = file.getFileName();
 		this.contenido = file.getContent();
-		fileDownload=null;
 	}
 
 	public Integer getTipo() {
@@ -654,15 +696,5 @@ public class ViewTraducir extends ViewControllerBase {
 		}
 		return true;
 	}
-
-
-    public StreamedContent getFileDownload() {
-		this.descargarArchivo();
-        return fileDownload;
-    }
-
-    public void setFiledownload(StreamedContent fileDownload) {
-        this.fileDownload = fileDownload;
-    }
 }
 

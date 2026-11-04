@@ -151,12 +151,12 @@
 					</div>
 				</div>
 				<p>
+					<!-- Descarga no AJAX: la accion genera la respuesta binaria directamente. -->
 					<p:commandButton id="btntraducir"
-									 value="#{not empty viewTraducir.file ? msg['dict.traducir'].concat(' ').concat( viewTraducir.file.fileName) : msg['dict.ficheroVacio']}"
+									 value="#{not empty viewTraducir.file ? msg['dict.traducir'].concat(' ').concat(viewTraducir.file.fileName) : msg['dict.ficheroVacio']}"
 									 disabled="#{empty viewTraducir.file}"
-									 update="messages">
-						<p:fileDownload value="#{viewTraducir.fileDownload}" />
-					</p:commandButton>
+									 action="#{viewTraducir.descargarArchivo}"
+									 ajax="false" />
 
 				</p>
 				<!--</p:tab>
