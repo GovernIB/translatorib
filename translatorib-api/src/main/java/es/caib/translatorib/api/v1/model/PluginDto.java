@@ -21,10 +21,12 @@ public class PluginDto implements Serializable {
     @Schema(description = "Descripcion del plugin")
     private String descripcion;
 
-    @Schema(description = "Idiomas soportados por el plugin")
+    @Schema(description = "Parejas de idiomas admitidas (ORIGEN:DESTINO, separadas por comas)",
+            example = "CASTELLANO:CATALAN,CASTELLANO:INGLES")
     private String idiomasPermitidos;
 
-    @Schema(description = "Idiomas habilitados para el frontal")
+    @Schema(description = "Parejas de idiomas habilitadas para el frontal (ORIGEN:DESTINO)",
+            example = "CASTELLANO:CATALAN_BALEAR")
     private String idiomasFrontal;
 
     @Schema(description = "Indica si es el plugin predeterminado")

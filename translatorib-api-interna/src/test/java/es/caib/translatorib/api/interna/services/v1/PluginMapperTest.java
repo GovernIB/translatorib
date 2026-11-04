@@ -6,6 +6,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class PluginMapperTest {
@@ -16,8 +17,8 @@ public class PluginMapperTest {
         origen.setCodigo(42L);
         origen.setIdentificador("mock");
         origen.setDescripcion("Plugin de prueba");
-        origen.setIdiomasPermitidos("es,ca");
-        origen.setIdiomasFrontal("ca");
+        origen.setIdiomasPermitidos("es es->ca ca,es es->ca ca_ES,es es->en en");
+        origen.setIdiomasFrontal("ca ca_ES->es es,en en->es es");
         origen.setPorDefecto(true);
         origen.setClassname("secreto.ClaseInterna");
         origen.setPrefijo("configuracion_interna");
@@ -26,12 +27,39 @@ public class PluginMapperTest {
         assertEquals(Long.valueOf(42L), dto.getCodigo());
         assertEquals("mock", dto.getIdentificador());
         assertEquals("Plugin de prueba", dto.getDescripcion());
-        assertEquals("es,ca", dto.getIdiomasPermitidos());
-        assertEquals("ca", dto.getIdiomasFrontal());
+        assertEquals("CASTELLANO:CATALAN,CASTELLANO:CATALAN_BALEAR,CASTELLANO:INGLES",
+                dto.getIdiomasPermitidos());
+        assertEquals("CATALAN_BALEAR:CASTELLANO,INGLES:CASTELLANO", dto.getIdiomasFrontal());
         assertTrue(dto.isPorDefecto());
         assertFalse(tieneGetter("getClassname"));
         assertFalse(tieneGetter("getPrefijo"));
         assertFalse(tieneGetter("getPropiedades"));
+
+        // El DTO no debe alterar los valores que siguen usando el Back y la BD.
+        assertEquals("es es->ca ca,es es->ca ca_ES,es es->en en", origen.getIdiomasPermitidos());
+        assertEquals("ca ca_ES->es es,en en->es es", origen.getIdiomasFrontal());
+    }
+
+    @Test
+    public void mantieneValoresDesconocidosSinCorromperlos() {
+        Plugin origen = new Plugin();
+        origen.setIdiomasPermitidos("xx xx->es es, es es -> en en");
+        origen.setIdiomasFrontal("CASTELLANO:CATALAN");
+
+        PluginDto dto = PluginMapper.toDto(origen);
+        assertEquals("xx xx->es es,CASTELLANO:INGLES", dto.getIdiomasPermitidos());
+        assertEquals("CASTELLANO:CATALAN", dto.getIdiomasFrontal());
+    }
+
+    @Test
+    public void admiteCamposNulosYVacios() {
+        Plugin origen = new Plugin();
+        origen.setIdiomasPermitidos(null);
+        origen.setIdiomasFrontal("");
+
+        PluginDto dto = PluginMapper.toDto(origen);
+        assertNull(dto.getIdiomasPermitidos());
+        assertEquals("", dto.getIdiomasFrontal());
     }
 
     private boolean tieneGetter(String nombre) {
