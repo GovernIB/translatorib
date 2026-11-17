@@ -6,7 +6,6 @@ import java.security.MessageDigest;
 import java.util.*;
 
 import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
-import javax.xml.namespace.QName;
 import javax.xml.ws.BindingProvider;
 
 import es.caib.translatorib.service.model.*;
@@ -35,6 +34,12 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 
 	private static final Logger LOG = LoggerFactory.getLogger(PlataPlugin.class);
 
+	/**
+	 * Reutilizamos una unica instancia del servicio SOAP para evitar recrear
+	 * metadatos y estructura del cliente en cada peticion.
+	 */
+	private static final TranslatorV2Service SOAP_SERVICE = new TranslatorV2Service();
+
 	/** Prefix. */
 	public static final String IMPLEMENTATION_BASE_PROPERTY = "plata.";
 
@@ -46,7 +51,8 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 					new ParejaIdiomas(Idioma.CATALAN, Idioma.CATALAN_BALEAR),
 					new ParejaIdiomas(Idioma.CATALAN_BALEAR, Idioma.CASTELLANO),
 					new ParejaIdiomas(Idioma.CATALAN_BALEAR, Idioma.CATALAN),
-					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.INGLES)
+					new ParejaIdiomas(Idioma.CASTELLANO, Idioma.INGLES) /*,
+					new ParejaIdiomas(Idioma.INGLES, Idioma.CASTELLANO)*/
 			));
 
 	/**
@@ -74,7 +80,9 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 		final ResultadoTraduccionTexto resultado = new ResultadoTraduccionTexto();
 		final String url , userName, userPass;
 
-		if (idiomaSalida == Idioma.INGLES && idiomaEntrada == Idioma.CASTELLANO) {
+		if ((idiomaSalida == Idioma.INGLES && idiomaEntrada == Idioma.CASTELLANO)
+		 || (idiomaSalida == Idioma.CASTELLANO && idiomaEntrada == Idioma.INGLES)  )
+		{
 			url = getPropiedad("rrnn_url");
 			userName = getPropiedad("rrnn_user");
 			userPass = getPropiedad("rrnn_pass");
@@ -88,10 +96,11 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 
 		long inicioPlata = System.currentTimeMillis();
 
+		TranslatorV2 port = null;
 		try {
 			LOG.info("Creando cliente SOAP de PLATA");
 
-			final TranslatorV2 port = getClientePlata(url, timeout);
+			port = getClientePlata(url, timeout);
 
 
 			final java.lang.Boolean proxyCache = false;
@@ -129,6 +138,8 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setError(true);
 			resultado.setDescripcionError(ExceptionUtils.getMessage(e));
 
+		} finally {
+			destroyClientePlata(port);
 		}
 
 		return resultado;
@@ -140,8 +151,9 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			final Opciones opciones) throws TraduccionException {
 		final ResultadoTraduccionDocumento resultado = new ResultadoTraduccionDocumento();
 		final String url, user, pass;
-		if (idiomaSalida == Idioma.INGLES
-				&& idiomaEntrada == Idioma.CASTELLANO) {
+		if ((idiomaSalida == Idioma.INGLES && idiomaEntrada == Idioma.CASTELLANO)
+				|| (idiomaSalida == Idioma.CASTELLANO && idiomaEntrada == Idioma.INGLES) )
+		{
 			url = getPropiedad("rrnn_url");
 			user = getPropiedad("rrnn_user");
 			pass = getPropiedad("rrnn_pass");
@@ -153,9 +165,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 		}
 		final Long timeout = Long.valueOf(getPropiedad("timeout"));
 
+		TranslatorV2 port = null;
 		try {
 
-			final TranslatorV2 port = getClientePlata(url, timeout);
+			port = getClientePlata(url, timeout);
 
 			final java.lang.Boolean proxyCache = false;
 			final java.lang.String translationEngine = "plata";
@@ -185,18 +198,18 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setDescripcionError(textoResultado.getError());
 
 		} catch (final Exception e) {
-			LOG.error("Error al traducir documento con PLATA. Endpoint={}, tipo={}, idiomas={} -> {}",
-					url, tipoDocumento, idiomaEntrada, idiomaSalida, e);
 			resultado.setError(true);
 			resultado.setDescripcionError(ExceptionUtils.getMessage(e));
 
+		} finally {
+			destroyClientePlata(port);
 		}
 
 		return resultado;
 	}
 
 	/**
-	 * GetClientOpenTrad
+	 * Get Cliente Plata
 	 *
 	 * @param url URL
 	 * @param timeout Timeout
@@ -204,46 +217,67 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	 * @throws NumberFormatException NumberFormatException
 	 * @throws Exception Exception
 	 */
-	private TranslatorV2 getClientePlata(final String url, final Long timeout) throws NumberFormatException, Exception {
-		/*final QName SERVICE = new QName("http://inteco.minhap.gov/", "Translator_v2Service");
-		final URL wsdlURL = new URL(url +"?wsdl");
-		final TranslatorV2Service servicio = new TranslatorV2Service(wsdlURL, SERVICE);
-		*/
-		// Utilizar el WSDL incluido en el proyecto
-		final TranslatorV2Service servicio =				new TranslatorV2Service();
-		// final TranslatorV2Service servicio = new TranslatorV2Service();
-		final TranslatorV2 serviceTasaSoap = servicio.getTranslatorV2Port();
-		final BindingProvider provider = (BindingProvider) serviceTasaSoap;
-		provider.getRequestContext().put(BindingProvider.ENDPOINT_ADDRESS_PROPERTY, url);
+	private TranslatorV2 getClientePlata(
+			final String url,
+			final Long timeout) throws Exception {
 
-		final Client client = ClientProxy.getClient(serviceTasaSoap);
-		final HTTPConduit conduit = (HTTPConduit) client.getConduit();
-		final HTTPClientPolicy httpClientPolicy = conduit.getClient();
+		final TranslatorV2 port =
+				SOAP_SERVICE.getTranslatorV2Port();
 
-		// Timeout
-		httpClientPolicy.setConnectionTimeout(10000L);
-		httpClientPolicy.setReceiveTimeout(
-				timeout != null ? timeout * 1000L : 60000L
-		);
+		try {
+			final BindingProvider provider = (BindingProvider) port;
 
-		//Para poder traducir pdfs
-		httpClientPolicy.setAllowChunking(false);
+			provider.getRequestContext().put(
+					BindingProvider.ENDPOINT_ADDRESS_PROPERTY,
+					url
+			);
 
-		// Vemos si hay que pasar por proxy
-		final String proxyHost = System.getProperty("http.proxyHost");
-		if (proxyHost != null && !"".equals(proxyHost)) {
-			if (!validateNonProxyHosts(url)) {
-				final HTTPClientPolicy policy = conduit.getClient();
-				policy.setProxyServer(proxyHost);
-				policy.setProxyServerPort(Integer.parseInt(System.getProperty("http.proxyPort")));
+			final Client client = ClientProxy.getClient(port);
+			final HTTPConduit conduit = (HTTPConduit) client.getConduit();
 
-				conduit.getProxyAuthorization().setUserName(System.getProperty("http.proxyUser"));
-				conduit.getProxyAuthorization().setPassword(System.getProperty("http.proxyPassword"));
+			final HTTPClientPolicy policy = conduit.getClient();
+
+			policy.setConnectionTimeout(10000L);
+			policy.setReceiveTimeout(
+					timeout != null ? timeout * 1000L : 60000L
+			);
+			policy.setAllowChunking(false);
+
+			// Configuración del proxy HTTP
+			final String proxyHost = System.getProperty("http.proxyHost");
+
+			if (proxyHost != null && !proxyHost.isEmpty()) {
+				if (!validateNonProxyHosts(url)) {
+					policy.setProxyServer(proxyHost);
+					policy.setProxyServerPort(
+							Integer.parseInt(System.getProperty("http.proxyPort"))
+					);
+
+					conduit.getProxyAuthorization().setUserName(
+							System.getProperty("http.proxyUser")
+					);
+					conduit.getProxyAuthorization().setPassword(
+							System.getProperty("http.proxyPassword")
+					);
+				}
 			}
+			return port;
+
+		} catch (Exception | Error e) {
+			destroyClientePlata(port);
+			throw e;
 		}
+	}
 
-		return serviceTasaSoap;
-
+	private void destroyClientePlata(final TranslatorV2 serviceTasaSoap) {
+		if (serviceTasaSoap == null) {
+			return;
+		}
+		try {
+			ClientProxy.getClient(serviceTasaSoap).destroy();
+		} catch (final Exception e) {
+			LOG.warn("No se ha podido liberar el cliente SOAP de PLATA", e);
+		}
 	}
 
 	private String getTipoDocumento(final TipoDocumento tipoDocumento) {

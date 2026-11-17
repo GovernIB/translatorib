@@ -17,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.ejb.EJB;
+import javax.annotation.PreDestroy;
 import javax.faces.bean.ManagedBean;
 import javax.faces.bean.ViewScoped;
 import javax.faces.context.FacesContext;
@@ -30,6 +31,7 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
@@ -44,6 +46,15 @@ import java.util.*;
 public class ViewTraducir extends ViewControllerBase {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ViewTraducir.class);
+
+	/**
+	 * Cliente HTTP compartido por las traducciones de texto y documentos.
+	 * No crear un nuevo HttpClient por petición: Java 11 mantiene recursos de
+	 * conexión y un SelectorManager asociados a cada instancia.
+	 */
+	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
 
 	@EJB
 	private PluginService	pluginService;
@@ -141,15 +152,67 @@ public class ViewTraducir extends ViewControllerBase {
 		idiomaDestinoOld = Idioma.CATALAN_BALEAR;
 	}
 
-	private UploadedFile file;
+	/**
+	 * El archivo se conserva como bytes, sin retener UploadedFile ni el buffer
+	 * del componente de subida en el estado de vista JSF.
+	 */
+	private static final long CADUCIDAD_DOCUMENTO_MS = 5L * 60L * 1000L;
 	private String fileName;
 	private byte[] contenido;
+	private long documentoCargadoEn;
+	private volatile boolean traduccionDocumentoEnCurso;
 
 	// Getters y setters
 
 	public void handleFileUpload(FileUploadEvent event) {
-		this.file = event.getFile();
-		this.fileName = file.getFileName();
+		guardarDocumento(event == null ? null : event.getFile());
+	}
+
+	private void guardarDocumento(final UploadedFile nuevoArchivo) {
+		limpiarDocumentoPendiente();
+		if (nuevoArchivo != null) {
+			final byte[] bytes = nuevoArchivo.getContent();
+			if (bytes != null && bytes.length > 0) {
+				this.fileName = nuevoArchivo.getFileName();
+				this.contenido = bytes;
+				this.documentoCargadoEn = System.currentTimeMillis();
+			}
+		}
+	}
+
+	private void limpiarDocumentoPendiente() {
+		this.contenido = null;
+		this.fileName = null;
+		this.documentoCargadoEn = 0L;
+	}
+
+	/**
+	 * Caducidad pasiva: tambien se comprueba al usar la vista, sin crear
+	 * un hilo ni una tarea programada por usuario.
+	 */
+	private void limpiarDocumentoSiCaducado() {
+		if (!traduccionDocumentoEnCurso && documentoCargadoEn > 0L
+				&& System.currentTimeMillis() - documentoCargadoEn >= CADUCIDAD_DOCUMENTO_MS) {
+			limpiarDocumentoPendiente();
+		}
+	}
+
+	/**
+	 * El idleMonitor JSF invoca este metodo una vez tras cinco minutos
+	 * sin interaccion del usuario en la vista de documentos.
+	 */
+	public void limpiarDocumentoInactivo() {
+		limpiarDocumentoSiCaducado();
+	}
+
+	public boolean isDocumentoDisponible() {
+		limpiarDocumentoSiCaducado();
+		return contenido != null && contenido.length > 0 && fileName != null;
+	}
+
+	@PreDestroy
+	public void destruirVista() {
+		limpiarDocumentoPendiente();
 	}
 
 	/**
@@ -158,7 +221,7 @@ public class ViewTraducir extends ViewControllerBase {
 	 */
 	public void descargarArchivo() {
 
-		if (file == null || contenido == null || contenido.length == 0) {
+		if (!isDocumentoDisponible()) {
 			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
 					UtilJSF.getLiteral("viewTraducir.ArchivoNoSeleccionado"));
 			return;
@@ -171,11 +234,12 @@ public class ViewTraducir extends ViewControllerBase {
 		}
 
 		boolean respuestaBinariaIniciada = false;
+		traduccionDocumentoEnCurso = true;
 
 		try {
 			ParametrosTraduccionDocumento parametros = new ParametrosTraduccionDocumento();
 			parametros.setPlugin(plugin);
-			parametros.setTipoDocumento(getTipoDocumento(file.getFileName()));
+			parametros.setTipoDocumento(getTipoDocumento(fileName));
 			parametros.setIdiomaEntrada(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaOrigen.toString()));
 			parametros.setIdiomaSalida(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaDestino.toString()));
 			parametros.setContenidoDocumento(Base64.getEncoder().encodeToString(contenido));
@@ -186,6 +250,7 @@ public class ViewTraducir extends ViewControllerBase {
 			String url = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_URL_DOC);
 			HttpRequest.Builder builder = HttpRequest.newBuilder()
 					.uri(URI.create(url))
+					.timeout(Duration.ofMinutes(15))
 					.header("Content-Type", "application/json")
 					.POST(HttpRequest.BodyPublishers.ofString(json));
 			if (user != null && pwd != null) {
@@ -195,8 +260,10 @@ public class ViewTraducir extends ViewControllerBase {
 			}
 			HttpRequest request = builder.build();
 
-			HttpResponse<String> respuesta = HttpClient.newHttpClient()
-					.send(request, HttpResponse.BodyHandlers.ofString());
+			long inicioRest = System.nanoTime();
+			HttpResponse<String> respuesta = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+			LOG.info("[TRADUCIR PERF] REST documento: {} ms, HTTP {}",
+					(System.nanoTime() - inicioRest) / 1_000_000L, respuesta.statusCode());
 			String contentType = respuesta.headers().firstValue("Content-Type").orElse("(no indicado)");
 
 			if (respuesta.statusCode() < 200 || respuesta.statusCode() >= 300) {
@@ -231,7 +298,9 @@ public class ViewTraducir extends ViewControllerBase {
 			byte[] bytesTraducidos = Base64.getMimeDecoder().decode(resultado.getTextoTraducido());
 
 			respuestaBinariaIniciada = true;
-			enviarDocumento(bytesTraducidos, file.getFileName());
+			enviarDocumento(bytesTraducidos, fileName);
+			// La respuesta binaria se ha enviado: no mantener el original en JSF.
+			limpiarDocumentoPendiente();
 
 		} catch (Exception e) {
 			LOG.error("Error al realizar la traducción documental", e);
@@ -242,6 +311,8 @@ public class ViewTraducir extends ViewControllerBase {
 				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
 						UtilJSF.getLiteral("viewTraducir.errorDescarga"));
 			}
+		} finally {
+			traduccionDocumentoEnCurso = false;
 		}
 	}
 
@@ -389,8 +460,7 @@ public class ViewTraducir extends ViewControllerBase {
 				ObjectMapper objectMapper = new ObjectMapper();
 				String json = objectMapper.writeValueAsString(parametros);
 
-				// Crear un cliente HttpClient
-				HttpClient client = HttpClient.newHttpClient();
+				// Usar el cliente HTTP compartido, sin crear un pool por traduccion.
 
 				// Crear una solicitud POST con el cuerpo en JSON
 				HttpRequest request;
@@ -398,12 +468,14 @@ public class ViewTraducir extends ViewControllerBase {
 				if (authHeader == null) {
 					request = HttpRequest.newBuilder()
 							.uri(URI.create(url))
+							.timeout(Duration.ofMinutes(3))
 							.header("Content-Type", "application/json")
 							.POST(HttpRequest.BodyPublishers.ofString(json))
 							.build();
 				} else {
 					request = HttpRequest.newBuilder()
 							.uri(URI.create(url))
+							.timeout(Duration.ofMinutes(3))
 							.header("Content-Type", "application/json")
 							.header("Authorization", authHeader) // Añadir el encabezado de autorización
 							.POST(HttpRequest.BodyPublishers.ofString(json))
@@ -412,12 +484,11 @@ public class ViewTraducir extends ViewControllerBase {
 
 
 
-				long inicio = System.currentTimeMillis();
-
-				LOG.info("Enviando petición REST...");
-
+				long inicio = System.nanoTime();
 				HttpResponse<String> respuesta =
-						client.send(request, HttpResponse.BodyHandlers.ofString());
+						HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+				LOG.info("[TRADUCIR PERF] REST texto: {} ms, HTTP {}",
+						(System.nanoTime() - inicio) / 1_000_000L, respuesta.statusCode());
 
 				// Convertir la respuesta String a ResultadoTraduccionTexto
 				ResultadoTraduccionTexto resultado = objectMapper.readValue(respuesta.body(), ResultadoTraduccionTexto.class);
@@ -639,20 +710,12 @@ public class ViewTraducir extends ViewControllerBase {
 		this.fileName = fileName;
 	}
 
-	public UploadedFile getFile() {
-		return file;
+	public void file(FileUploadEvent event) {
+		guardarDocumento(event == null ? null : event.getFile());
 	}
 
-	public void file(FileUploadEvent file) {
-		this.file = file.getFile();
-		this.fileName = file.getFile().getFileName();
-		this.contenido = file.getFile().getContent();
-	}
-
-	public void setFile(UploadedFile file) {
-		this.file = file;
-		this.fileName = file.getFileName();
-		this.contenido = file.getContent();
+	public void setFile(UploadedFile archivo) {
+		guardarDocumento(archivo);
 	}
 
 	public Integer getTipo() {

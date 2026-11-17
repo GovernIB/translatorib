@@ -116,6 +116,11 @@
 				<!--</p:tab>-->
 			</p:card>
 			<p:card id="tab2" rendered="#{viewTraducir.tipo == 1}" styleClass="limpiacardshadow limpiacardmargin limpiacardpadding" >
+				<!-- Limpieza de documento caducado sin polling periódico. -->
+				<p:idleMonitor timeout="300000">
+					<p:ajax event="idle" listener="#{viewTraducir.limpiarDocumentoInactivo}"
+							process="@this" update="btntraducir" />
+				</p:idleMonitor>
 				<!-- Segunda pestaña: Subir archivo-->
 					<p:fileUpload id="fic" listener="#{viewTraducir.file}"
 								  widgetVar="uploadDnd"
@@ -153,8 +158,8 @@
 				<p>
 					<!-- Descarga no AJAX: la accion genera la respuesta binaria directamente. -->
 					<p:commandButton id="btntraducir"
-									 value="#{not empty viewTraducir.file ? msg['dict.traducir'].concat(' ').concat(viewTraducir.file.fileName) : msg['dict.ficheroVacio']}"
-									 disabled="#{empty viewTraducir.file}"
+									 value="#{viewTraducir.documentoDisponible ? msg['dict.traducir'].concat(' ').concat(viewTraducir.fileName) : msg['dict.ficheroVacio']}"
+									 disabled="#{not viewTraducir.documentoDisponible}"
 									 action="#{viewTraducir.descargarArchivo}"
 									 ajax="false" />
 

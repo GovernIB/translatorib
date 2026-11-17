@@ -83,6 +83,13 @@ public class DialogPlugins extends ViewControllerBase  {
             todasLasCombinaciones = new ArrayList<>();
         }
 
+        LOG.info("TOTAL IDIOMAS DISPONIBLES: {}",
+                todasLasCombinaciones.size());
+
+        for (ParejaIdiomas pareja : todasLasCombinaciones) {
+            LOG.info("IDIOMA DISPONIBLE: {}", pareja);
+        }
+
         if (data.getIdiomasPermitidos() != null
                 && !data.getIdiomasPermitidos().isEmpty()) {
 
