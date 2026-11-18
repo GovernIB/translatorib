@@ -25,6 +25,14 @@
             <artifactId>slf4j-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Acceso de compilacion al plugin PLATA, ya incluido en EAR/lib.
+             No debe empaquetarse de nuevo dentro del EJB. -->
+        <dependency>
+            <groupId>es.caib.translatorib</groupId>
+            <artifactId>translatorib-plugin-plata</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- Altres mòduls -->
         <dependency>
             <groupId>es.caib.translatorib</groupId>

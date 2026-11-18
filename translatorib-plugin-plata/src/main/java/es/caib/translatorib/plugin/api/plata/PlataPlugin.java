@@ -4,9 +4,15 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 import javax.xml.bind.annotation.adapters.HexBinaryAdapter;
 import javax.xml.ws.BindingProvider;
+import javax.xml.ws.WebServiceException;
 
 import es.caib.translatorib.service.model.*;
 import org.apache.commons.lang3.exception.ExceptionUtils;
@@ -39,6 +45,168 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	 * metadatos y estructura del cliente en cada peticion.
 	 */
 	private static final TranslatorV2Service SOAP_SERVICE = new TranslatorV2Service();
+
+	/**
+	 * Pool compartido por todas las instancias del plugin (PluginFactoryBean crea
+	 * un objeto PlataPlugin en cada peticion REST). Cada puerto solo se presta a
+	 * una peticion a la vez; los proxies JAX-WS no se comparten concurrentemente.
+	 *
+	 * Hay un pool por URL/timeout, por lo que RRNN y el endpoint normal no se
+	 * mezclan. La configuracion del proxy HTTP de la JVM se asume estable.
+	 */
+	private static final int MAX_CLIENTES_POR_ENDPOINT = 4;
+	private static final long ESPERA_POOL_SEGUNDOS = 30L;
+	/** Solo se registra WARN si la espera del pool supera este umbral. */
+	private static final long UMBRAL_ESPERA_MS = 500L;
+	/** Detecta traducciones que mantienen un puerto ocupado mucho tiempo. */
+	private static final long UMBRAL_USO_MS = 5000L;
+	private static final ConcurrentMap<String, PoolClientePlata> POOLS =
+			new ConcurrentHashMap<String, PoolClientePlata>();
+
+	private static final class PoolClientePlata {
+		private final String url;
+		private final long timeoutMs;
+		private final Semaphore permisos = new Semaphore(MAX_CLIENTES_POR_ENDPOINT, true);
+		private final ConcurrentLinkedQueue<TranslatorV2> disponibles =
+				new ConcurrentLinkedQueue<TranslatorV2>();
+		private boolean cerrado;
+
+		PoolClientePlata(final String url, final long timeoutMs) {
+			this.url = url;
+			this.timeoutMs = timeoutMs;
+		}
+
+		PrestamoPlata adquirir() throws Exception {
+			// Medir solo la espera del semaforo, separada del tiempo SOAP.
+			final long inicioEsperaNs = System.nanoTime();
+			final boolean adquirido;
+			try {
+				adquirido = permisos.tryAcquire(ESPERA_POOL_SEGUNDOS, TimeUnit.SECONDS);
+			} catch (final InterruptedException e) {
+				Thread.currentThread().interrupt();
+				LOG.warn("[PLATA POOL] Espera interrumpida; endpoint={}, enCola={}",
+						url, permisos.getQueueLength());
+				throw e;
+			}
+			final long esperaMs = TimeUnit.NANOSECONDS.toMillis(
+					System.nanoTime() - inicioEsperaNs);
+
+			if (!adquirido) {
+				LOG.error("[PLATA POOL] SATURADO: espera={} ms, max={}, "
+						+ "disponibles={}, enCola={}, endpoint={}",
+						esperaMs, MAX_CLIENTES_POR_ENDPOINT, permisos.availablePermits(),
+						permisos.getQueueLength(), url);
+				throw new IllegalStateException(
+						"Pool SOAP PLATA saturado: mas de " + MAX_CLIENTES_POR_ENDPOINT
+								+ " traducciones concurrentes para el mismo endpoint");
+			}
+
+			if (esperaMs >= UMBRAL_ESPERA_MS) {
+				LOG.warn("[PLATA POOL] Espera elevada: espera={} ms, "
+						+ "ocupados={}, disponibles={}, enCola={}, endpoint={}",
+						esperaMs, MAX_CLIENTES_POR_ENDPOINT - permisos.availablePermits(),
+						permisos.availablePermits(), permisos.getQueueLength(), url);
+			}
+
+			try {
+				final TranslatorV2 port;
+				synchronized (this) {
+					if (cerrado) {
+						throw new IllegalStateException("Pool SOAP PLATA cerrado");
+					}
+					port = disponibles.poll();
+				}
+
+				if (port != null) {
+					LOG.debug("Reutilizando un puerto SOAP PLATA del pool");
+					return new PrestamoPlata(this, port);
+				}
+
+				final TranslatorV2 creado = crearPuerto(url, timeoutMs);
+				LOG.info("Nuevo puerto SOAP PLATA creado (maximo por endpoint: {})",
+						MAX_CLIENTES_POR_ENDPOINT);
+				return new PrestamoPlata(this, creado);
+			} catch (final Exception | Error e) {
+				permisos.release();
+				throw e;
+			}
+		}
+
+		void devolver(final TranslatorV2 port, final boolean invalidado) {
+			final boolean destruir;
+			synchronized (this) {
+				destruir = invalidado || cerrado;
+				if (!destruir) {
+					disponibles.offer(port);
+				}
+			}
+			try {
+				if (destruir) {
+					destroyClientePlata(port);
+				}
+			} finally {
+				permisos.release();
+			}
+		}
+
+		void cerrar() {
+			final List<TranslatorV2> paraDestruir = new ArrayList<TranslatorV2>();
+			synchronized (this) {
+				cerrado = true;
+				TranslatorV2 port;
+				while ((port = disponibles.poll()) != null) {
+					paraDestruir.add(port);
+				}
+			}
+			for (final TranslatorV2 port : paraDestruir) {
+				destroyClientePlata(port);
+			}
+			// Un puerto en uso sera destruido cuando su peticion lo devuelva.
+		}
+	}
+
+	/** Prestamo exclusivo de un proxy JAX-WS; cerrar siempre en finally. */
+	private static final class PrestamoPlata implements AutoCloseable {
+		private final PoolClientePlata pool;
+		private final TranslatorV2 port;
+		private final long inicioUsoNs = System.nanoTime();
+		private boolean invalidado;
+		private boolean devuelto;
+
+		PrestamoPlata(final PoolClientePlata pool, final TranslatorV2 port) {
+			this.pool = pool;
+			this.port = port;
+		}
+
+		TranslatorV2 getPort() {
+			return port;
+		}
+
+		void invalidar() {
+			invalidado = true;
+		}
+
+		@Override
+		public void close() {
+			if (!devuelto) {
+				devuelto = true;
+				// Tiempo durante el que la peticion ha retenido el puerto (SOAP + preparacion).
+				final long usoMs = TimeUnit.NANOSECONDS.toMillis(
+						System.nanoTime() - inicioUsoNs);
+				try {
+					pool.devolver(port, invalidado);
+				} finally {
+					if (usoMs >= UMBRAL_USO_MS) {
+						LOG.warn("[PLATA POOL] Puerto ocupado demasiado tiempo: "
+								+ "uso={} ms, invalidado={}, disponibles={}, enCola={}, endpoint={}",
+								usoMs, invalidado, pool.permisos.availablePermits(),
+								pool.permisos.getQueueLength(), pool.url);
+					}
+				}
+			}
+		}
+	}
+
 
 	/** Prefix. */
 	public static final String IMPLEMENTATION_BASE_PROPERTY = "plata.";
@@ -96,11 +264,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 
 		long inicioPlata = System.currentTimeMillis();
 
-		TranslatorV2 port = null;
+		PrestamoPlata cliente = null;
 		try {
-			LOG.info("Creando cliente SOAP de PLATA");
-
-			port = getClientePlata(url, timeout);
+			cliente = getClientePlata(url, timeout);
+			final TranslatorV2 port = cliente.getPort();
 
 
 			final java.lang.Boolean proxyCache = false;
@@ -129,6 +296,9 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setTextoTraducido(textoResultado);
 
 		} catch (final Exception e) {
+			if (cliente != null && esErrorDeTransporte(e)) {
+				cliente.invalidar();
+			}
 			LOG.error("ERROR PLATA - URL: {}, idiomas: {} -> {}, tiempo: {} ms",
 					url,
 					idiomaEntrada,
@@ -139,7 +309,9 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setDescripcionError(ExceptionUtils.getMessage(e));
 
 		} finally {
-			destroyClientePlata(port);
+			if (cliente != null) {
+				cliente.close();
+			}
 		}
 
 		return resultado;
@@ -165,10 +337,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 		}
 		final Long timeout = Long.valueOf(getPropiedad("timeout"));
 
-		TranslatorV2 port = null;
+		PrestamoPlata cliente = null;
 		try {
-
-			port = getClientePlata(url, timeout);
+			cliente = getClientePlata(url, timeout);
+			final TranslatorV2 port = cliente.getPort();
 
 			final java.lang.Boolean proxyCache = false;
 			final java.lang.String translationEngine = "plata";
@@ -198,86 +370,104 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setDescripcionError(textoResultado.getError());
 
 		} catch (final Exception e) {
+			if (cliente != null && esErrorDeTransporte(e)) {
+				cliente.invalidar();
+			}
 			resultado.setError(true);
 			resultado.setDescripcionError(ExceptionUtils.getMessage(e));
 
 		} finally {
-			destroyClientePlata(port);
+			if (cliente != null) {
+				cliente.close();
+			}
 		}
 
 		return resultado;
 	}
 
 	/**
-	 * Get Cliente Plata
-	 *
-	 * @param url URL
-	 * @param timeout Timeout
-	 * @return Cliente
-	 * @throws NumberFormatException NumberFormatException
-	 * @throws Exception Exception
+	 * Obtiene un prestamo exclusivo de un puerto SOAP reutilizable.
+	 * El timeout de la configuracion PLATA se expresa en segundos.
 	 */
-	private TranslatorV2 getClientePlata(
-			final String url,
-			final Long timeout) throws Exception {
+	private PrestamoPlata getClientePlata(final String url, final Long timeout) throws Exception {
+		final long timeoutMs = timeout != null ? Math.multiplyExact(timeout, 1000L) : 60000L;
+		final String key = url.length() + ":" + url + ":" + timeoutMs;
 
-		final TranslatorV2 port =
-				SOAP_SERVICE.getTranslatorV2Port();
+		final PoolClientePlata pool = POOLS.computeIfAbsent(key,
+				k -> new PoolClientePlata(url, timeoutMs));
+		return pool.adquirir();
+	}
+
+	/** Se ejecuta al crear un puerto nuevo, nunca por cada reutilizacion. */
+	private static TranslatorV2 crearPuerto(final String url, final long timeoutMs) throws Exception {
+		// Serializamos la creacion del proxy sobre el Service compartido.
+		final TranslatorV2 port;
+		synchronized (SOAP_SERVICE) {
+			port = SOAP_SERVICE.getTranslatorV2Port();
+		}
 
 		try {
 			final BindingProvider provider = (BindingProvider) port;
-
-			provider.getRequestContext().put(
-					BindingProvider.ENDPOINT_ADDRESS_PROPERTY,
-					url
-			);
+			provider.getRequestContext().put(BindingProvider.ENDPOINT_ADDRESS_PROPERTY, url);
 
 			final Client client = ClientProxy.getClient(port);
 			final HTTPConduit conduit = (HTTPConduit) client.getConduit();
-
 			final HTTPClientPolicy policy = conduit.getClient();
 
 			policy.setConnectionTimeout(10000L);
-			policy.setReceiveTimeout(
-					timeout != null ? timeout * 1000L : 60000L
-			);
+			policy.setReceiveTimeout(timeoutMs);
 			policy.setAllowChunking(false);
 
-			// Configuración del proxy HTTP
+			// Mantenemos el comportamiento de proxy del codigo original.
 			final String proxyHost = System.getProperty("http.proxyHost");
-
-			if (proxyHost != null && !proxyHost.isEmpty()) {
-				if (!validateNonProxyHosts(url)) {
-					policy.setProxyServer(proxyHost);
-					policy.setProxyServerPort(
-							Integer.parseInt(System.getProperty("http.proxyPort"))
-					);
-
-					conduit.getProxyAuthorization().setUserName(
-							System.getProperty("http.proxyUser")
-					);
-					conduit.getProxyAuthorization().setPassword(
-							System.getProperty("http.proxyPassword")
-					);
-				}
+			if (proxyHost != null && !proxyHost.isEmpty() && !validateNonProxyHosts(url)) {
+				policy.setProxyServer(proxyHost);
+				policy.setProxyServerPort(Integer.parseInt(System.getProperty("http.proxyPort")));
+				conduit.getProxyAuthorization().setUserName(System.getProperty("http.proxyUser"));
+				conduit.getProxyAuthorization().setPassword(System.getProperty("http.proxyPassword"));
 			}
 			return port;
-
-		} catch (Exception | Error e) {
+		} catch (final Exception | Error e) {
 			destroyClientePlata(port);
 			throw e;
 		}
 	}
 
-	private void destroyClientePlata(final TranslatorV2 serviceTasaSoap) {
-		if (serviceTasaSoap == null) {
+	/** Descarta puertos ante fallos de CXF, JAX-WS o del transporte HTTP. */
+	private static boolean esErrorDeTransporte(final Throwable error) {
+		Throwable causa = error;
+		while (causa != null) {
+			if (causa instanceof WebServiceException
+					|| causa instanceof org.apache.cxf.interceptor.Fault
+					|| causa instanceof java.io.IOException) {
+				return true;
+			}
+			if (causa.getCause() == causa) {
+				break;
+			}
+			causa = causa.getCause();
+		}
+		return false;
+	}
+
+	private static void destroyClientePlata(final TranslatorV2 port) {
+		if (port == null) {
 			return;
 		}
 		try {
-			ClientProxy.getClient(serviceTasaSoap).destroy();
+			ClientProxy.getClient(port).destroy();
 		} catch (final Exception e) {
 			LOG.warn("No se ha podido liberar el cliente SOAP de PLATA", e);
 		}
+	}
+
+	/** Invocado por PlataPoolLifecycleBean durante la parada de TranslatorIB. */
+	public static void cerrarPools() {
+		for (final PoolClientePlata pool : POOLS.values()) {
+			pool.cerrar();
+		}
+		POOLS.clear();
+		LOG.info("Pools SOAP PLATA cerrados");
 	}
 
 	private String getTipoDocumento(final TipoDocumento tipoDocumento) {
