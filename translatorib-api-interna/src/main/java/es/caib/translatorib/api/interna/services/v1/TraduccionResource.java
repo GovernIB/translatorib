@@ -7,6 +7,8 @@ import javax.ejb.TransactionAttributeType;
 import javax.inject.Inject;
 import javax.validation.Valid;
 import javax.ws.rs.Consumes;
+import javax.ws.rs.core.Context;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
@@ -25,6 +27,8 @@ import org.eclipse.microprofile.openapi.annotations.parameters.RequestBody;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import java.util.UUID;
 
 import es.caib.translatorib.api.v1.model.ParametrosTraduccionDocumento;
 import es.caib.translatorib.api.v1.model.ParametrosTraduccionTexto;
@@ -52,6 +56,17 @@ public class TraduccionResource {
 	@Inject
 	private TraduccionService traduccionService;
 
+	@Context
+	private HttpHeaders cabeceras;
+
+	private String identificarTraza() {
+		String propuesta = cabeceras == null ? null
+				: cabeceras.getHeaderString("X-Translatorib-Trace");
+		// Evita inyectar contenido arbitrario en el log mediante cabeceras HTTP.
+		return propuesta != null && propuesta.matches("[a-zA-Z0-9-]{1,64}")
+				? propuesta : UUID.randomUUID().toString();
+	}
+
 	/**
 	 * Obté un procediment
 	 *
@@ -63,7 +78,6 @@ public class TraduccionResource {
 	@Operation(operationId = "test", summary = "Test de prueba que devuelve el texto traducir traducido : traduir")
 	@APIResponse(responseCode = "200", description = "Procediment", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ResultadoTraduccionTexto.class)))
 	public Response get() {
-		LOG.error("TraduccionResources.TEST");
 		final String textoEntrada = "traducir";
 		final TipoEntrada tipoEntrada = TipoEntrada.TEXTO_PLANO;
 		final Idioma idiomaEntrada = Idioma.CASTELLANO;
@@ -86,25 +100,34 @@ public class TraduccionResource {
 	@APIResponse(responseCode = "200", description = "Traduccion TEXTO", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ResultadoTraduccionTexto.class)))
 	public Response realizarTraduccion(
 			@RequestBody(description = "Parametros para la traducción", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ParametrosTraduccionTexto.class))) @Valid final ParametrosTraduccionTexto parametros) {
-		LOG.error("TraduccionResources.traduccion.text");
-		final TipoEntrada tipoEntrada = TipoEntrada
-				.fromString(parametros.getTipoEntrada().toString());
-		final Idioma idiomaEntrada = getIdioma(parametros.getIdiomaEntrada());
-		final Idioma idiomaSalida = getIdioma(parametros.getIdiomaSalida());
-		final Opciones opciones = crearOpciones(parametros.getOpciones());
+		final String trace = identificarTraza();
 
-		final es.caib.translatorib.service.model.ResultadoTraduccionTexto resultado = traduccionService
-				.realizarTraduccion(parametros.getTextoEntrada(), tipoEntrada, idiomaEntrada, idiomaSalida,
-						parametros.getPlugin(), opciones);
+		MDC.put("translatoribTrace", trace);
+		try {
+			if (parametros == null || parametros.getTipoEntrada() == null
+					|| parametros.getIdiomaEntrada() == null || parametros.getIdiomaSalida() == null) {
+				return Response.status(Response.Status.BAD_REQUEST).build();
+			}
+			final TipoEntrada tipoEntrada = TipoEntrada.fromString(parametros.getTipoEntrada().toString());
+			final Idioma idiomaEntrada = getIdioma(parametros.getIdiomaEntrada());
+			final Idioma idiomaSalida = getIdioma(parametros.getIdiomaSalida());
+			final Opciones opciones = crearOpciones(parametros.getOpciones());
 
-		if (resultado != null) {
-			return Response.ok(cast(resultado)).build();
-		} else {
+			final es.caib.translatorib.service.model.ResultadoTraduccionTexto resultado = traduccionService
+					.realizarTraduccion(parametros.getTextoEntrada(), tipoEntrada, idiomaEntrada, idiomaSalida,
+							parametros.getPlugin(), opciones);
 
+			if (resultado != null) {
+				return Response.ok(cast(resultado)).build();
+			}
 			return Response.status(Response.Status.NOT_FOUND).build();
+		} catch (RuntimeException ex) {
+			LOG.error("Error interno en la REST API de traducción de texto", ex);
+			throw ex;
+		} finally {
+			MDC.remove("translatoribTrace");
 		}
 	}
-
 
 	public Idioma getIdioma(
 			final es.caib.translatorib.api.v1.model.Idioma idioma) {
@@ -156,21 +179,30 @@ public class TraduccionResource {
 	@APIResponse(responseCode = "200", description = "Traduccion DOC", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ResultadoTraduccionDocumento.class)))
 	public Response realizarTraduccionDocumento(
 			@RequestBody(description = "Parametros para la traducción", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ParametrosTraduccionDocumento.class))) @Valid final ParametrosTraduccionDocumento parametros) {
-		LOG.error("TraduccionResources.traduccion.documento");
-		final TipoDocumento tipoDocumento = TipoDocumento
-				.fromString(parametros.getTipoDocumento().toString());
-		final Idioma idiomaEntrada = getIdioma(parametros.getIdiomaEntrada());
-		final Idioma idiomaSalida = getIdioma(parametros.getIdiomaSalida());
-		final Opciones opciones = crearOpciones(parametros.getOpciones());
+		final String trace = identificarTraza();
 
-		final es.caib.translatorib.service.model.ResultadoTraduccionDocumento resultado = traduccionService
-				.realizarTraduccionDocumento(parametros.getContenidoDocumento(), tipoDocumento, idiomaEntrada,
-						idiomaSalida, parametros.getPlugin(), opciones);
-
-		if (resultado != null) {
-			return Response.ok(cast(resultado)).build();
-		} else {
+		MDC.put("translatoribTrace", trace);
+		try {
+			if (parametros == null || parametros.getTipoDocumento() == null
+					|| parametros.getIdiomaEntrada() == null || parametros.getIdiomaSalida() == null) {
+				return Response.status(Response.Status.BAD_REQUEST).build();
+			}
+			final TipoDocumento tipoDocumento = TipoDocumento.fromString(parametros.getTipoDocumento().toString());
+			final Idioma idiomaEntrada = getIdioma(parametros.getIdiomaEntrada());
+			final Idioma idiomaSalida = getIdioma(parametros.getIdiomaSalida());
+			final Opciones opciones = crearOpciones(parametros.getOpciones());
+			final es.caib.translatorib.service.model.ResultadoTraduccionDocumento resultado = traduccionService
+					.realizarTraduccionDocumento(parametros.getContenidoDocumento(), tipoDocumento, idiomaEntrada,
+							idiomaSalida, parametros.getPlugin(), opciones);
+			if (resultado != null) {
+				return Response.ok(cast(resultado)).build();
+			}
 			return Response.status(Response.Status.NOT_FOUND).build();
+		} catch (RuntimeException ex) {
+			LOG.error("Error interno en la REST API de traducción de documentos", ex);
+			throw ex;
+		} finally {
+			MDC.remove("translatoribTrace");
 		}
 	}
 

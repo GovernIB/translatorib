@@ -12,7 +12,13 @@
 	<name>translatorib - BACK</name>
 	<description>Backoffice de translatorib</description>
 
-	<dependencies>
+	<dependencies>		<!-- Cliente REST de la vista: timeout total por llamada y cierre de Response. -->
+		<dependency>
+			<groupId>com.squareup.okhttp3</groupId>
+			<artifactId>okhttp</artifactId>
+			<version>3.14.9</version>
+		</dependency>
+
 		<!-- Especificacions i llibreries proporcionades per JBoss -->
 		<dependency>
 			<groupId>org.jboss.spec</groupId>

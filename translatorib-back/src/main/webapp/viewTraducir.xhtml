@@ -101,7 +101,9 @@
 								<p:commandButton id="btnTraducir" value="#{msg['dict.traducir']}"
 												 styleClass="" icon="pi pi-search"
 												 actionListener="#{viewTraducir.traducir()}"
-												 update="textAreaDestino messages"
+												 timeout="15000"
+											 onerror="alert('No ha sido posible conectarse a la REST API o la pantalla no ha recibido respuesta.')"
+											 update="textAreaDestino messages"
 												 process="@form"/>
 
 								<p:commandButton id="btnTraducirJAVA" value="#{msg['dict.traducir']} JAVA"

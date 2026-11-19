@@ -26,11 +26,10 @@ import javax.faces.event.AjaxBehaviorEvent;
 import javax.inject.Inject;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.URI;
+import java.net.http.HttpTimeoutException;
+import es.caib.translatorib.backend.util.RestHttpCliente;
+import java.util.concurrent.Semaphore;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -47,14 +46,28 @@ public class ViewTraducir extends ViewControllerBase {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ViewTraducir.class);
 
+	/** Cliente REST OkHttp compartido en RestHttpCliente (no por vista). */
+	/** Limite TOTAL de espera de la respuesta REST (no solo de conexion TCP). */
+	private static final Duration TIMEOUT_REST = Duration.ofSeconds(10);
+	private static final String ERROR_CONEXION_REST =
+			"No ha sido posible conectarse a la REST API (tiempo de espera de 10 segundos agotado).";
+
 	/**
-	 * Cliente HTTP compartido por las traducciones de texto y documentos.
-	 * No crear un nuevo HttpClient por petición: Java 11 mantiene recursos de
-	 * conexión y un SelectorManager asociados a cada instancia.
+	 * ViewTraducir es @ViewScoped, NO singleton: cada usuario/vista tiene su bean.
+	 * El HttpClient y estos semaforos SI se comparten entre vistas en esta JVM.
+	 * Limitar los auto-HTTP sin ocupar todos los hilos Undertow esperando al mismo JBoss.
 	 */
-	private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
-			.connectTimeout(Duration.ofSeconds(10))
-			.build();
+	private static final int MAX_REST_TEXTO =
+			Math.max(1, Integer.getInteger("translatorib.view.maxRestConcurrent", 4));
+	private static final Semaphore REST_TEXTO_PLAZAS = new Semaphore(MAX_REST_TEXTO, true);
+	private static final int MAX_REST_DOCUMENTO =
+			Math.max(1, Integer.getInteger("translatorib.view.maxRestDocumentConcurrent", 2));
+	private static final Semaphore REST_DOCUMENTO_PLAZAS =
+			new Semaphore(MAX_REST_DOCUMENTO, true);
+
+	private void mostrarErrorRest() {
+		UtilJSF.addMessageContext(TypeNivelGravedad.ERROR, ERROR_CONEXION_REST);
+	}
 
 	@EJB
 	private PluginService	pluginService;
@@ -233,6 +246,14 @@ public class ViewTraducir extends ViewControllerBase {
 			return;
 		}
 
+		final String trace = UUID.randomUUID().toString();
+
+		if (!REST_DOCUMENTO_PLAZAS.tryAcquire()) {
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+					"Hay demasiadas traducciones de documentos en curso. Inténtalo de nuevo.");
+			return;
+		}
+
 		boolean respuestaBinariaIniciada = false;
 		traduccionDocumentoEnCurso = true;
 
@@ -248,23 +269,15 @@ public class ViewTraducir extends ViewControllerBase {
 			String pwd = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_PWD);
 			String json = new ObjectMapper().writeValueAsString(parametros);
 			String url = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_URL_DOC);
-			HttpRequest.Builder builder = HttpRequest.newBuilder()
-					.uri(URI.create(url))
-					.timeout(Duration.ofMinutes(15))
-					.header("Content-Type", "application/json")
-					.POST(HttpRequest.BodyPublishers.ofString(json));
+			String authHeader = null;
 			if (user != null && pwd != null) {
 				String auth = Base64.getEncoder().encodeToString(
 						(user + ":" + pwd).getBytes(StandardCharsets.UTF_8));
-				builder.header("Authorization", "Basic " + auth);
+				authHeader = "Basic " + auth;
 			}
-			HttpRequest request = builder.build();
 
-			long inicioRest = System.nanoTime();
-			HttpResponse<String> respuesta = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-			LOG.info("[TRADUCIR PERF] REST documento: {} ms, HTTP {}",
-					(System.nanoTime() - inicioRest) / 1_000_000L, respuesta.statusCode());
-			String contentType = respuesta.headers().firstValue("Content-Type").orElse("(no indicado)");
+			RestHttpCliente.Respuesta respuesta = RestHttpCliente.post(url, json, authHeader, trace, "VIEW_DOC");
+			String contentType = respuesta.contentType();
 
 			if (respuesta.statusCode() < 200 || respuesta.statusCode() >= 300) {
 				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
@@ -302,10 +315,16 @@ public class ViewTraducir extends ViewControllerBase {
 			// La respuesta binaria se ha enviado: no mantener el original en JSF.
 			limpiarDocumentoPendiente();
 
+		} catch (HttpTimeoutException e) {
+			LOG.warn("Se ha agotado el tiempo de espera de la REST API (10 segundos)");
+			mostrarErrorRest();
+		} catch (IOException e) {
+			LOG.error("Error de comunicación con la REST API", e);
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+					"No ha sido posible conectarse a la REST API.");
 		} catch (Exception e) {
-			LOG.error("Error al realizar la traducción documental", e);
+			LOG.error("Error inesperado al realizar la traducción", e);
 			if (respuestaBinariaIniciada) {
-				// Si la respuesta es binaria, JSF no debe intentar renderizar HTML de error.
 				FacesContext.getCurrentInstance().responseComplete();
 			} else {
 				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
@@ -313,6 +332,7 @@ public class ViewTraducir extends ViewControllerBase {
 			}
 		} finally {
 			traduccionDocumentoEnCurso = false;
+			REST_DOCUMENTO_PLAZAS.release();
 		}
 	}
 
@@ -434,77 +454,79 @@ public class ViewTraducir extends ViewControllerBase {
 	 * Realizar traduccion.
 	 */
 	public void traducir() {
-
-		if (plugin != null && idiomaDestino != null && idiomaOrigen != null) {
-
-			try {
-				// Conectarse por restapi a un servicio de traduccion utilizando ParametrosTraduccionTexto
-				ParametrosTraduccionTexto parametros = new ParametrosTraduccionTexto();
-				parametros.setPlugin(plugin);
-				parametros.setTipoEntrada(es.caib.translatorib.api.v1.model.TipoEntrada.TEXTO_PLANO);
-				parametros.setIdiomaEntrada(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaOrigen.toString()));
-				parametros.setIdiomaSalida(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaDestino.toString()));
-				parametros.setTextoEntrada(textoOrigen);
-
-				String authHeader = null;
-				String user = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_USER);
-				String pwd =  configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_PWD);
-				if (user != null && pwd != null) {
-					// Codificar user y pass en Base64
-					String auth = user + ":" + pwd;
-					String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes());
-					authHeader = "Basic " + encodedAuth;
-				}
-
-				// Convertir el objeto a JSON usando Jackson
-				ObjectMapper objectMapper = new ObjectMapper();
-				String json = objectMapper.writeValueAsString(parametros);
-
-				// Usar el cliente HTTP compartido, sin crear un pool por traduccion.
-
-				// Crear una solicitud POST con el cuerpo en JSON
-				HttpRequest request;
-				String url = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_URL_TEXT);
-				if (authHeader == null) {
-					request = HttpRequest.newBuilder()
-							.uri(URI.create(url))
-							.timeout(Duration.ofMinutes(3))
-							.header("Content-Type", "application/json")
-							.POST(HttpRequest.BodyPublishers.ofString(json))
-							.build();
-				} else {
-					request = HttpRequest.newBuilder()
-							.uri(URI.create(url))
-							.timeout(Duration.ofMinutes(3))
-							.header("Content-Type", "application/json")
-							.header("Authorization", authHeader) // Añadir el encabezado de autorización
-							.POST(HttpRequest.BodyPublishers.ofString(json))
-							.build();
-				}
+		final String trace = UUID.randomUUID().toString();
 
 
+		if (plugin == null || idiomaDestino == null || idiomaOrigen == null) {
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+					UtilJSF.getLiteral("viewTraducir.faltandatos"));
+			return;
+		}
+		// No esperar en un hilo JSF por un hueco: ante sobrecarga se informa al usuario.
+		if (!REST_TEXTO_PLAZAS.tryAcquire()) {
+			textoDestino = "Demasiadas traducciones en curso. Inténtalo de nuevo en unos segundos.";
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR, textoDestino);
+			return;
+		}
 
-				long inicio = System.nanoTime();
-				HttpResponse<String> respuesta =
-						HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-				LOG.info("[TRADUCIR PERF] REST texto: {} ms, HTTP {}",
-						(System.nanoTime() - inicio) / 1_000_000L, respuesta.statusCode());
+		try {
+			ParametrosTraduccionTexto parametros = new ParametrosTraduccionTexto();
+			parametros.setPlugin(plugin);
+			parametros.setTipoEntrada(es.caib.translatorib.api.v1.model.TipoEntrada.TEXTO_PLANO);
+			parametros.setIdiomaEntrada(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaOrigen.toString()));
+			parametros.setIdiomaSalida(es.caib.translatorib.api.v1.model.Idioma.fromString(idiomaDestino.toString()));
+			parametros.setTextoEntrada(textoOrigen);
 
-				// Convertir la respuesta String a ResultadoTraduccionTexto
-				ResultadoTraduccionTexto resultado = objectMapper.readValue(respuesta.body(), ResultadoTraduccionTexto.class);
-
-				if (resultado.isError()) {
-					textoDestino = "Error en la traduccion:" + resultado.getDescripcionError();
-				} else {
-					textoDestino = resultado.getTextoTraducido();
-				}
-				//UtilJSF.addMessageContext(TypeNivelGravedad.INFO,  UtilJSF.getLiteral("viewTraducir.")+"" );
-			} catch (Exception e) {
-				LOG.error("Error al realizar la traducción", e);
-				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,  UtilJSF.getLiteral("viewTraducir.errorTraduccion")+"" );
+			String authHeader = null;
+			String user = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_USER);
+			String pwd = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_PWD);
+			if (user != null && pwd != null) {
+				String auth = user + ":" + pwd;
+				authHeader = "Basic " + Base64.getEncoder()
+						.encodeToString(auth.getBytes(StandardCharsets.UTF_8));
 			}
-		}else{
-			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,  UtilJSF.getLiteral("viewTraducir.faltandatos"));
+
+			ObjectMapper objectMapper = new ObjectMapper();
+			String json = objectMapper.writeValueAsString(parametros);
+			String url = configuracionGlobalService.valorByPropiedad(Constantes.PROPIEDAD_GLOBAL_FRONTAL_URL_TEXT);
+
+
+			RestHttpCliente.Respuesta respuesta =
+					RestHttpCliente.post(url, json, authHeader, trace, "VIEW");
+
+
+			if (respuesta.statusCode() < 200 || respuesta.statusCode() >= 300
+					|| respuesta.body() == null || respuesta.body().trim().isEmpty()) {
+				textoDestino = "Error de la REST API (HTTP " + respuesta.statusCode() + ").";
+				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR, textoDestino);
+				return;
+			}
+
+			ResultadoTraduccionTexto resultado =
+					objectMapper.readValue(respuesta.body(), ResultadoTraduccionTexto.class);
+			if (resultado == null) {
+				textoDestino = "La REST API ha devuelto una respuesta vacía.";
+				UtilJSF.addMessageContext(TypeNivelGravedad.ERROR, textoDestino);
+			} else if (resultado.isError()) {
+				textoDestino = "Error en la traduccion:" + resultado.getDescripcionError();
+			} else {
+				textoDestino = resultado.getTextoTraducido();
+			}
+
+		} catch (HttpTimeoutException e) {
+			LOG.warn("Se ha agotado el tiempo de espera de la REST API (10 segundos)");
+			textoDestino = ERROR_CONEXION_REST;
+			mostrarErrorRest();
+		} catch (IOException e) {
+			LOG.error("Error de comunicación con la REST API", e);
+			textoDestino = "No ha sido posible conectarse a la REST API.";
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR, textoDestino);
+		} catch (Exception e) {
+			LOG.error("Error inesperado al realizar la traducción", e);
+			UtilJSF.addMessageContext(TypeNivelGravedad.ERROR,
+					UtilJSF.getLiteral("viewTraducir.errorTraduccion"));
+		} finally {
+			REST_TEXTO_PLAZAS.release();
 		}
 	}
 

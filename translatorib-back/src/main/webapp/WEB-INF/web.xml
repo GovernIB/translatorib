@@ -8,6 +8,10 @@
   <listener>
     <listener-class>org.springframework.web.context.request.RequestContextListener</listener-class>
   </listener>
+  <!-- Cierra recursos del HTTP client al parar/redeployar el WAR. -->
+  <listener>
+    <listener-class>es.caib.translatorib.backend.util.RestHttpCliente</listener-class>
+  </listener>
   <context-param>
     <param-name>contextConfigLocation</param-name>
     <param-value>/WEB-INF/beans.xml</param-value>

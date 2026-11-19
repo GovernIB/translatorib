@@ -56,10 +56,7 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	 */
 	private static final int MAX_CLIENTES_POR_ENDPOINT = 4;
 	private static final long ESPERA_POOL_SEGUNDOS = 30L;
-	/** Solo se registra WARN si la espera del pool supera este umbral. */
-	private static final long UMBRAL_ESPERA_MS = 500L;
-	/** Detecta traducciones que mantienen un puerto ocupado mucho tiempo. */
-	private static final long UMBRAL_USO_MS = 5000L;
+
 	private static final ConcurrentMap<String, PoolClientePlata> POOLS =
 			new ConcurrentHashMap<String, PoolClientePlata>();
 
@@ -77,35 +74,23 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 		}
 
 		PrestamoPlata adquirir() throws Exception {
-			// Medir solo la espera del semaforo, separada del tiempo SOAP.
-			final long inicioEsperaNs = System.nanoTime();
+
 			final boolean adquirido;
 			try {
 				adquirido = permisos.tryAcquire(ESPERA_POOL_SEGUNDOS, TimeUnit.SECONDS);
 			} catch (final InterruptedException e) {
 				Thread.currentThread().interrupt();
-				LOG.warn("[PLATA POOL] Espera interrumpida; endpoint={}, enCola={}",
-						url, permisos.getQueueLength());
 				throw e;
 			}
-			final long esperaMs = TimeUnit.NANOSECONDS.toMillis(
-					System.nanoTime() - inicioEsperaNs);
 
 			if (!adquirido) {
-				LOG.error("[PLATA POOL] SATURADO: espera={} ms, max={}, "
+				LOG.error("[PLATA POOL] SATURADO: esperaMax={} segundos, max={}, "
 						+ "disponibles={}, enCola={}, endpoint={}",
-						esperaMs, MAX_CLIENTES_POR_ENDPOINT, permisos.availablePermits(),
+						ESPERA_POOL_SEGUNDOS, MAX_CLIENTES_POR_ENDPOINT, permisos.availablePermits(),
 						permisos.getQueueLength(), url);
 				throw new IllegalStateException(
 						"Pool SOAP PLATA saturado: mas de " + MAX_CLIENTES_POR_ENDPOINT
 								+ " traducciones concurrentes para el mismo endpoint");
-			}
-
-			if (esperaMs >= UMBRAL_ESPERA_MS) {
-				LOG.warn("[PLATA POOL] Espera elevada: espera={} ms, "
-						+ "ocupados={}, disponibles={}, enCola={}, endpoint={}",
-						esperaMs, MAX_CLIENTES_POR_ENDPOINT - permisos.availablePermits(),
-						permisos.availablePermits(), permisos.getQueueLength(), url);
 			}
 
 			try {
@@ -118,13 +103,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 				}
 
 				if (port != null) {
-					LOG.debug("Reutilizando un puerto SOAP PLATA del pool");
 					return new PrestamoPlata(this, port);
 				}
 
 				final TranslatorV2 creado = crearPuerto(url, timeoutMs);
-				LOG.info("Nuevo puerto SOAP PLATA creado (maximo por endpoint: {})",
-						MAX_CLIENTES_POR_ENDPOINT);
 				return new PrestamoPlata(this, creado);
 			} catch (final Exception | Error e) {
 				permisos.release();
@@ -169,7 +151,7 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 	private static final class PrestamoPlata implements AutoCloseable {
 		private final PoolClientePlata pool;
 		private final TranslatorV2 port;
-		private final long inicioUsoNs = System.nanoTime();
+
 		private boolean invalidado;
 		private boolean devuelto;
 
@@ -190,19 +172,7 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 		public void close() {
 			if (!devuelto) {
 				devuelto = true;
-				// Tiempo durante el que la peticion ha retenido el puerto (SOAP + preparacion).
-				final long usoMs = TimeUnit.NANOSECONDS.toMillis(
-						System.nanoTime() - inicioUsoNs);
-				try {
-					pool.devolver(port, invalidado);
-				} finally {
-					if (usoMs >= UMBRAL_USO_MS) {
-						LOG.warn("[PLATA POOL] Puerto ocupado demasiado tiempo: "
-								+ "uso={} ms, invalidado={}, disponibles={}, enCola={}, endpoint={}",
-								usoMs, invalidado, pool.permisos.availablePermits(),
-								pool.permisos.getQueueLength(), pool.url);
-					}
-				}
+				pool.devolver(port, invalidado);
 			}
 		}
 	}
@@ -269,7 +239,6 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			cliente = getClientePlata(url, timeout);
 			final TranslatorV2 port = cliente.getPort();
 
-
 			final java.lang.Boolean proxyCache = false;
 			final java.lang.String translationEngine = "plata";
 			final String documentBase64 = "";
@@ -286,12 +255,10 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			} else {
 				contentType = tipoEntrada.toString();
 			}
+
 			final String textoResultado = port.translateString(proxyCache, translationEngine, null, languagePair, ner,
 					contentType, markUnknown, codeTranslate, null, null, null, userName, userPass);
 
-			LOG.info("PLATA - Traducción completada correctamente");
-			LOG.info("Tiempo de respuesta PLATA: {} ms",
-					System.currentTimeMillis() - inicioPlata);
 			resultado.setError(false);
 			resultado.setTextoTraducido(textoResultado);
 
@@ -358,6 +325,7 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			final byte[] targetArray = Base64.getDecoder().decode(documentoEntradaB64);
 			final String valorChecksum = (new HexBinaryAdapter())
 					.marshal(MessageDigest.getInstance("MD5").digest(targetArray)).toLowerCase();
+
 			final CustomFileResponse textoResultado = port.translateFile(proxyCache, translationEngine,
 					documentoEntradaB64, languagePair, ner, tipoDocumentoStr, markUnknown, null, valorChecksum, urlX,
 					dirbase, user, pass);
@@ -370,6 +338,7 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			resultado.setDescripcionError(textoResultado.getError());
 
 		} catch (final Exception e) {
+			LOG.error("Error en la traducción de documentos con PLATA", e);
 			if (cliente != null && esErrorDeTransporte(e)) {
 				cliente.invalidar();
 			}
@@ -467,7 +436,6 @@ public class PlataPlugin extends AbstractPluginProperties implements ITraduccion
 			pool.cerrar();
 		}
 		POOLS.clear();
-		LOG.info("Pools SOAP PLATA cerrados");
 	}
 
 	private String getTipoDocumento(final TipoDocumento tipoDocumento) {
